@@ -1,0 +1,82 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-display: "Plus Jakarta Sans", system-ui, -apple-system, sans-serif;
+  --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
+
+  --color-canvas: #090B0E;
+  --color-surface: #11151B;
+  --color-surface-elevated: #171C24;
+  --color-hairline: #222936;
+  --color-hairline-strong: #2E3748;
+  --color-accent: #3B82F6;
+  --color-accent-bright: #60A5FA;
+  --color-nominal: #16A34A;
+  --color-caution: #D97706;
+  --color-critical: #DC2626;
+}
+
+@layer base {
+  html,
+  body {
+    background-color: #090B0E;
+    color: #F1F5F9;
+    font-family: var(--font-sans);
+    letter-spacing: 0.01em;
+    color-scheme: dark;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-display);
+    text-wrap: balance;
+  }
+}
+
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Precision studio grid for spatial display arrangement canvas */
+.spatial-grid {
+  background-color: #090B0E;
+  background-image:
+    radial-gradient(circle at 1px 1px, rgba(148, 163, 184, 0.14) 1px, transparent 0),
+    linear-gradient(to right, rgba(34, 41, 54, 0.25) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(34, 41, 54, 0.25) 1px, transparent 1px);
+  background-size: 24px 24px, 120px 120px, 120px 120px;
+}
+
+/* Subtle custom scrollbars for dark studio surfaces */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #090B0E;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #222936;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #334155;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}

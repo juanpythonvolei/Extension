@@ -1,0 +1,110 @@
+{
+  "name": "continuum-desktop",
+  "productName": "Continuum",
+  "version": "1.2.0",
+  "description": "Continuum — Ecossistema Multiplataforma e Second Screen sem fio",
+  "main": "main.js",
+  "author": "Continuum <support@continuum.local>",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "build:linux": "electron-builder --linux deb AppImage --x64",
+    "build:win": "electron-builder --win nsis portable --x64"
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "app.continuum.desktop",
+    "productName": "Continuum",
+    "directories": {
+      "buildResources": "build",
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "config.json",
+      "build/icon.png",
+      "build/icon.ico"
+    ],
+    "extraResources": [
+      {
+        "from": "bridge",
+        "to": "bridge",
+        "filter": [
+          "**/*"
+        ]
+      }
+    ],
+    "linux": {
+      "target": [
+        {
+          "target": "deb",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "AppImage",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.png",
+      "category": "Utility",
+      "maintainer": "Continuum <support@continuum.local>",
+      "synopsis": "Ecossistema Multiplataforma e Second Screen sem fio",
+      "desktop": {
+        "entry": {
+          "Name": "Continuum",
+          "GenericName": "Second Screen and Device Mesh",
+          "Comment": "Ecossistema Multiplataforma e Monitor Secundario sem Fio",
+          "Categories": "Network;Utility;System;",
+          "StartupWMClass": "Continuum"
+        }
+      }
+    },
+    "deb": {
+      "depends": [
+        "python3"
+      ],
+      "recommends": [
+        "xdotool",
+        "wmctrl",
+        "pulseaudio-utils | wireplumber",
+        "playerctl"
+      ]
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "shortcutName": "Continuum",
+      "artifactName": "Continuum-Windows-Setup.exe"
+    },
+    "portable": {
+      "artifactName": "Continuum-Windows-Portable.exe"
+    }
+  }
+}

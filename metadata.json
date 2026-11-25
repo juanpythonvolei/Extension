@@ -1,0 +1,6 @@
+{
+  "name": "Continuum",
+  "description": "Ecossistema multiplataforma em tempo real para Windows, Linux, Android e iOS com Second Screen sem fio, mapa espacial de telas, controle remoto e transferência instantânea de arquivos.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
