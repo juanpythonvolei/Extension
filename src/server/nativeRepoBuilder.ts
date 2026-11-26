@@ -316,15 +316,7 @@ jobs:
         env:
           INPUT_SERVER: \${{ inputs.server_url }}
           INPUT_ROOM: \${{ inputs.room_code }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
-            if (process.env.INPUT_SERVER) cfg.serverUrl = process.env.INPUT_SERVER.replace(/\\/+$/, "");
-            if (process.env.INPUT_ROOM) cfg.roomCode = process.env.INPUT_ROOM.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-            fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\\n");
-            console.log("Desktop Linux config:", cfg);
-          '
+        run: node scripts/apply-config.js
 
       - name: Install desktop dependencies
         working-directory: desktop
@@ -359,19 +351,10 @@ jobs:
 
       - name: Apply runtime server config
         working-directory: desktop
-        shell: pwsh
         env:
           INPUT_SERVER: \${{ inputs.server_url }}
           INPUT_ROOM: \${{ inputs.room_code }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
-            if (process.env.INPUT_SERVER) cfg.serverUrl = process.env.INPUT_SERVER.replace(/\\/+$/, "");
-            if (process.env.INPUT_ROOM) cfg.roomCode = process.env.INPUT_ROOM.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-            fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\\n");
-            console.log("Desktop Windows config:", cfg);
-          '
+        run: node scripts/apply-config.js
 
       - name: Install desktop dependencies
         working-directory: desktop
@@ -509,17 +492,26 @@ jobs:
           maintainer: 'Continuum <support@continuum.local>',
           synopsis: 'Ecossistema Multiplataforma e Second Screen sem fio',
           desktop: {
-            entry: {
-              Name: 'Continuum',
-              GenericName: 'Second Screen and Device Mesh',
-              Comment: 'Ecossistema Multiplataforma e Monitor Secundario sem Fio',
-              Categories: 'Network;Utility;System;',
-              StartupWMClass: 'Continuum',
-            },
+            Name: 'Continuum',
+            GenericName: 'Second Screen and Device Mesh',
+            Comment: 'Ecossistema Multiplataforma e Monitor Secundario sem Fio',
+            Categories: 'Network;Utility;System;',
+            StartupWMClass: 'Continuum',
           },
         },
         deb: {
-          depends: ['python3'],
+          depends: [
+            'libgtk-3-0',
+            'libnotify4',
+            'libnss3',
+            'libxss1',
+            'libxtst6',
+            'xdg-utils',
+            'libatspi2.0-0',
+            'libuuid1',
+            'libsecret-1-0',
+            'python3',
+          ],
           recommends: ['xdotool', 'wmctrl', 'pulseaudio-utils | wireplumber', 'playerctl'],
         },
         win: {
@@ -563,6 +555,24 @@ contextBridge.exposeInMainWorld('continuumNative', {
   platform: process.platform,
   version: '1.2.0',
 });
+`;
+
+  const desktopApplyConfigJs = `const fs = require('node:fs');
+const path = require('node:path');
+
+const cfgPath = path.join(__dirname, '..', 'config.json');
+const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
+
+if (process.env.INPUT_SERVER && process.env.INPUT_SERVER.trim()) {
+  cfg.serverUrl = process.env.INPUT_SERVER.trim().replace(/\\/+$/, '');
+}
+if (process.env.INPUT_ROOM && process.env.INPUT_ROOM.trim()) {
+  const cleaned = process.env.INPUT_ROOM.trim().toUpperCase().replace(/[^A-Z0-9]/g, '').slice(0, 8);
+  if (cleaned.length >= 4) cfg.roomCode = cleaned;
+}
+
+fs.writeFileSync(cfgPath, JSON.stringify(cfg, null, 2) + '\\n', 'utf8');
+console.log('Continuum Desktop build config:', cfg);
 `;
 
   const desktopMainJs = `const { app, BrowserWindow, Menu, Tray, desktopCapturer, dialog, nativeImage, session, shell } = require('electron');
@@ -1173,6 +1183,7 @@ class MainActivity : AppCompatActivity() {
     { name: 'desktop/config.json', content: desktopConfigJson },
     { name: 'desktop/main.js', content: desktopMainJs },
     { name: 'desktop/preload.js', content: desktopPreloadJs },
+    { name: 'desktop/scripts/apply-config.js', content: desktopApplyConfigJs },
     {
       name: 'desktop/bridge/continuum_bridge.py',
       content: buildLinuxBridgePython(room, wsUrl),

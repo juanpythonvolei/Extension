@@ -34,15 +34,7 @@ jobs:
         env:
           INPUT_SERVER: ${{ inputs.server_url }}
           INPUT_ROOM: ${{ inputs.room_code }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
-            if (process.env.INPUT_SERVER) cfg.serverUrl = process.env.INPUT_SERVER.replace(/\/+$/, "");
-            if (process.env.INPUT_ROOM) cfg.roomCode = process.env.INPUT_ROOM.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-            fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\n");
-            console.log("Desktop Linux config:", cfg);
-          '
+        run: node scripts/apply-config.js
 
       - name: Install desktop dependencies
         working-directory: desktop
@@ -77,19 +69,10 @@ jobs:
 
       - name: Apply runtime server config
         working-directory: desktop
-        shell: pwsh
         env:
           INPUT_SERVER: ${{ inputs.server_url }}
           INPUT_ROOM: ${{ inputs.room_code }}
-        run: |
-          node -e '
-            const fs = require("fs");
-            const cfg = JSON.parse(fs.readFileSync("config.json", "utf8"));
-            if (process.env.INPUT_SERVER) cfg.serverUrl = process.env.INPUT_SERVER.replace(/\/+$/, "");
-            if (process.env.INPUT_ROOM) cfg.roomCode = process.env.INPUT_ROOM.toUpperCase().replace(/[^A-Z0-9]/g, "").slice(0, 8);
-            fs.writeFileSync("config.json", JSON.stringify(cfg, null, 2) + "\n");
-            console.log("Desktop Windows config:", cfg);
-          '
+        run: node scripts/apply-config.js
 
       - name: Install desktop dependencies
         working-directory: desktop

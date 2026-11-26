@@ -58,17 +58,24 @@
       "maintainer": "Continuum <support@continuum.local>",
       "synopsis": "Ecossistema Multiplataforma e Second Screen sem fio",
       "desktop": {
-        "entry": {
-          "Name": "Continuum",
-          "GenericName": "Second Screen and Device Mesh",
-          "Comment": "Ecossistema Multiplataforma e Monitor Secundario sem Fio",
-          "Categories": "Network;Utility;System;",
-          "StartupWMClass": "Continuum"
-        }
+        "Name": "Continuum",
+        "GenericName": "Second Screen and Device Mesh",
+        "Comment": "Ecossistema Multiplataforma e Monitor Secundario sem Fio",
+        "Categories": "Network;Utility;System;",
+        "StartupWMClass": "Continuum"
       }
     },
     "deb": {
       "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
         "python3"
       ],
       "recommends": [
