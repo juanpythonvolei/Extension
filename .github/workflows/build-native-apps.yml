@@ -1,0 +1,180 @@
+name: Build Continuum Native Apps
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+  workflow_dispatch:
+    inputs:
+      server_url:
+        description: 'URL publica do servidor Continuum (ex: https://ais-pre-...run.app)'
+        required: false
+        default: 'https://ais-pre-a6iomfzcjhr5udpk6kpqgs-702819737353.us-east1.run.app'
+      room_code:
+        description: 'Codigo da malha inicial (ex: MESH01)'
+        required: false
+        default: 'MESH01'
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    name: Linux Native GTK3 (.deb + .tar.gz)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Apply optional workflow_dispatch config
+        working-directory: native-apps/linux
+        env:
+          INPUT_SERVER: ${{ inputs.server_url }}
+          INPUT_ROOM: ${{ inputs.room_code }}
+        run: |
+          python3 - <<'PY'
+          import os, re
+          p = "continuum_app.py"
+          src = open(p, encoding="utf-8").read()
+          srv = (os.environ.get("INPUT_SERVER") or "").strip().rstrip("/")
+          room = re.sub(r"[^A-Z0-9]", "", (os.environ.get("INPUT_ROOM") or "").upper())[:8]
+          if srv.startswith(("http://", "https://")):
+              ws = ("wss://" if srv.startswith("https://") else "ws://") + srv.split("://", 1)[1] + "/ws"
+              src = re.sub(r'DEFAULT_SERVER_URL = ".*?"', f'DEFAULT_SERVER_URL = "{srv}"', src, count=1)
+              src = re.sub(r'DEFAULT_WS_URL = ".*?"', f'DEFAULT_WS_URL = "{ws}"', src, count=1)
+          if len(room) >= 4:
+              src = re.sub(r'DEFAULT_ROOM_CODE = ".*?"', f'DEFAULT_ROOM_CODE = "{room}"', src, count=1)
+          open(p, "w", encoding="utf-8").write(src)
+          PY
+          python3 -m py_compile continuum_app.py
+
+      - name: Build native Linux .deb and portable archive
+        working-directory: native-apps/linux
+        run: |
+          chmod +x build-deb.sh continuum_app.py
+          ./build-deb.sh
+          dpkg-deb --info dist/Continuum-Linux-amd64.deb
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: continuum-linux-native
+          path: native-apps/linux/dist/*
+
+  build-windows:
+    name: Windows Native C# .NET 8 (.exe + Setup.exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Apply optional workflow_dispatch config
+        working-directory: native-apps/windows
+        shell: pwsh
+        env:
+          INPUT_SERVER: ${{ inputs.server_url }}
+          INPUT_ROOM: ${{ inputs.room_code }}
+        run: |
+          $code = Get-Content -Raw -Encoding UTF8 Program.cs
+          if ($env:INPUT_SERVER -and $env:INPUT_SERVER.StartsWith("http")) {
+            $srv = $env:INPUT_SERVER.Trim().TrimEnd("/")
+            $code = [regex]::Replace($code, 'ServerUrl { get; set; } = ".*?";', "ServerUrl { get; set; } = `"$srv`";")
+          }
+          if ($env:INPUT_ROOM -and $env:INPUT_ROOM.Length -ge 4) {
+            $rm = ($env:INPUT_ROOM.ToUpper() -replace '[^A-Z0-9]', '')
+            if ($rm.Length -gt 8) { $rm = $rm.Substring(0, 8) }
+            $code = [regex]::Replace($code, 'RoomCode { get; set; } = ".*?";', "RoomCode { get; set; } = `"$rm`";")
+          }
+          Set-Content -Path Program.cs -Value $code -Encoding UTF8
+
+      - name: Publish single-file native Windows executable
+        working-directory: native-apps/windows
+        run: dotnet publish Continuum.Windows.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o publish
+
+      - name: Build NSIS Windows Installer
+        working-directory: native-apps/windows
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item publish\Continuum.exe dist\Continuum-Windows.exe
+          if (Get-Command makensis -ErrorAction SilentlyContinue) {
+            makensis installer.nsi
+            Move-Item -Force Continuum-Windows-Setup.exe dist\Continuum-Windows-Setup.exe
+          }
+          Get-ChildItem dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: continuum-windows-native
+          path: native-apps/windows/dist/*
+
+  build-android:
+    name: Android Native Kotlin (.apk)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+
+      - name: Compile 100% Native Android APK (Zero WebView)
+        working-directory: native-apps/android
+        env:
+          INPUT_SERVER: ${{ inputs.server_url }}
+          INPUT_ROOM: ${{ inputs.room_code }}
+        run: |
+          EXTRA_ARGS=""
+          if [ -n "$INPUT_SERVER" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS -PcontinuumUrl=$INPUT_SERVER"
+          fi
+          if [ -n "$INPUT_ROOM" ]; then
+            EXTRA_ARGS="$EXTRA_ARGS -ProomCode=$INPUT_ROOM"
+          fi
+          gradle assembleDebug $EXTRA_ARGS --no-daemon
+          mkdir -p dist
+          cp app/build/outputs/apk/debug/app-debug.apk dist/Continuum-Android.apk
+          ls -lh dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: continuum-android-native
+          path: native-apps/android/dist/Continuum-Android.apk
+
+  publish-release:
+    name: Publish Native Apps Release
+    needs: [ build-linux, build-windows, build-android ]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        working-directory: release-assets
+        run: |
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
+          name: Continuum Native Apps v2.0 (${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Build Recente' }})
+          make_latest: true
+          body: |
+            ## Aplicativos 100% Nativos Compilados — Continuum (Sem WebApp / Sem WebView)
+
+            - **Linux (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** `Continuum-Linux-amd64.deb`
+            - **Linux Portátil (Fedora, Arch, Manjaro — GTK 3):** `Continuum-Linux-Portable.tar.gz`
+            - **Windows 10/11 (Instalador NSIS — C# .NET 8):** `Continuum-Windows-Setup.exe`
+            - **Windows 10/11 (Executável Único — C# .NET 8):** `Continuum-Windows.exe`
+            - **Android (Kotlin + OkHttp + Trackpad Nativo):** `Continuum-Android.apk`
+          files: release-assets/*

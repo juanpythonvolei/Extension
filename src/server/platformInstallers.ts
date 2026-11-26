@@ -3,6 +3,13 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildZipBuffer, type ZipEntryInput } from './zipBuilder.ts';
 import { buildDebPackage, type TarEntry } from './debBuilder.ts';
+import {
+  buildAndroidNativeProjectEntries,
+  buildLinuxNativeAppPy,
+  buildWindowsNativeCsproj,
+  buildWindowsNativeProgramCs,
+  buildWindowsNsisScript,
+} from './nativeAppsSource.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -60,15 +67,16 @@ export function buildIcoFromPng(pngBuf: Buffer): Buffer {
 }
 
 /**
- * WINDOWS PLUG-AND-PLAY PACKAGE (Zero Terminal, Zero Node.js)
- * Uses built-in Windows WScript + .NET WinForms + System.Net.WebSockets + native .ico + Edge/Chrome App Mode.
+ * WINDOWS 100% NATIVE DESKTOP APPLICATION (Zero Browser, Zero WebView, Zero Node.js, Zero Terminal)
+ * Runs a real Windows Forms (.NET) dark desktop UI + System Tray + Win32 P/Invoke + ClientWebSocket,
+ * and also bundles the C# .NET 8 single-file project source for standalone .exe compilation.
  */
 export function buildWindowsInstallerZip(ctx: InstallerContext): Buffer {
   const room = safeStr(ctx.roomCode);
-  const appUrl = safeStr(`${ctx.appUrl}/?room=${room}`);
   const wsUrl = safeStr(ctx.wsUrl);
+  const appUrl = safeStr(ctx.appUrl);
 
-  const installVbs = toCRLF(`' Continuum - Instalador Plug-and-Play para Windows (Sem Terminal)
+  const installVbs = toCRLF(`' Continuum - Instalador Nativo Plug-and-Play para Windows (Sem Navegador / Sem Terminal)
 Option Explicit
 Dim fso, shell, srcDir, installDir, startMenu, desktop, shortcut, startShortcut, iconPath
 
@@ -83,7 +91,7 @@ If Not fso.FolderExists(installDir) Then
 End If
 
 Dim files, f
-files = Array("Continuum.vbs", "ContinuumBridge.ps1", "Desinstalar Continuum.vbs", "continuum.ico", "continuum.svg")
+files = Array("Continuum.vbs", "ContinuumApp.ps1", "Desinstalar Continuum.vbs", "continuum.ico", "continuum.svg")
 For Each f In files
   If fso.FileExists(srcDir & "\\" & f) Then
     fso.CopyFile srcDir & "\\" & f, installDir & "\\" & f, True
@@ -102,7 +110,7 @@ Set shortcut = shell.CreateShortcut(desktop & "\\Continuum.lnk")
 shortcut.TargetPath = "wscript.exe"
 shortcut.Arguments = """" & installDir & "\\Continuum.vbs"""
 shortcut.WorkingDirectory = installDir
-shortcut.Description = "Continuum - Ecossistema Multiplataforma e Second Screen"
+shortcut.Description = "Continuum - Aplicativo Nativo Windows (Malha Multiplataforma)"
 shortcut.IconLocation = iconPath
 shortcut.Save
 
@@ -116,7 +124,7 @@ Set startShortcut = shell.CreateShortcut(startMenu & "\\Continuum.lnk")
 startShortcut.TargetPath = "wscript.exe"
 startShortcut.Arguments = """" & installDir & "\\Continuum.vbs"""
 startShortcut.WorkingDirectory = installDir
-startShortcut.Description = "Continuum - Ecossistema Multiplataforma e Second Screen"
+startShortcut.Description = "Continuum - Aplicativo Nativo Windows (Malha Multiplataforma)"
 startShortcut.IconLocation = iconPath
 startShortcut.Save
 
@@ -128,51 +136,25 @@ uninstShortcut.WorkingDirectory = installDir
 uninstShortcut.IconLocation = "shell32.dll,31"
 uninstShortcut.Save
 
-MsgBox "Continuum instalado com sucesso!" & vbCrLf & vbCrLf & _
-  "- Atalho com icone proprio criado na Area de Trabalho e no Menu Iniciar." & vbCrLf & _
+MsgBox "Continuum Nativo instalado com sucesso!" & vbCrLf & vbCrLf & _
+  "- Aplicativo Desktop 100% Nativo Windows (WinForms + Win32, sem navegador)." & vbCrLf & _
+  "- Atalho criado na Area de Trabalho e no Menu Iniciar." & vbCrLf & _
   "- Malha pareada automaticamente: ${room}" & vbCrLf & vbCrLf & _
-  "O aplicativo sera aberto agora em modo nativo.", vbInformation, "Continuum para Windows"
+  "O Continuum sera aberto agora.", vbInformation, "Continuum para Windows"
 
 shell.Run "wscript.exe """ & installDir & "\\Continuum.vbs""", 0, False
 `);
 
-  const launcherVbs = toCRLF(`' Continuum - Inicializador Nativo Windows (Janela App + Bandeja do Sistema)
+  const launcherVbs = toCRLF(`' Continuum - Inicializador Nativo Windows (100% WinForms + Bandeja do Sistema, Sem Navegador)
 Option Explicit
-Dim fso, shell, appDir, bridgeScript, appUrl, browserPath
+Dim fso, shell, appDir, appScript
 
 Set fso = CreateObject("Scripting.FileSystemObject")
 Set shell = CreateObject("WScript.Shell")
 appDir = fso.GetParentFolderName(WScript.ScriptFullName)
-bridgeScript = appDir & "\\ContinuumBridge.ps1"
-appUrl = "${appUrl}"
+appScript = appDir & "\\ContinuumApp.ps1"
 
-' 1. Inicia a Ponte Nativa do Sistema na Bandeja do Windows (sem janela de console)
-shell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & bridgeScript & """", 0, False
-
-' 2. Abre a interface do Continuum em janela dedicada estilo app nativo (Edge ou Chrome)
-Dim candidates, c
-candidates = Array( _
-  shell.ExpandEnvironmentStrings("%ProgramFiles(x86)%") & "\\Microsoft\\Edge\\Application\\msedge.exe", _
-  shell.ExpandEnvironmentStrings("%ProgramFiles%") & "\\Microsoft\\Edge\\Application\\msedge.exe", _
-  shell.ExpandEnvironmentStrings("%ProgramFiles%") & "\\Google\\Chrome\\Application\\chrome.exe", _
-  shell.ExpandEnvironmentStrings("%ProgramFiles(x86)%") & "\\Google\\Chrome\\Application\\chrome.exe", _
-  shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\\Google\\Chrome\\Application\\chrome.exe", _
-  shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\\BraveSoftware\\Brave-Browser\\Application\\brave.exe" _
-)
-
-browserPath = ""
-For Each c In candidates
-  If fso.FileExists(c) Then
-    browserPath = c
-    Exit For
-  End If
-Next
-
-If browserPath <> "" Then
-  shell.Run """" & browserPath & """ --app=""" & appUrl & """ --new-window", 1, False
-Else
-  shell.Run appUrl, 1, False
-End If
+shell.Run "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -STA -File """ & appScript & """", 0, False
 `);
 
   const uninstallVbs = toCRLF(`' Continuum - Desinstalador Windows
@@ -192,13 +174,15 @@ installDir = shell.ExpandEnvironmentStrings("%LOCALAPPDATA%") & "\\Continuum"
 On Error Resume Next
 If fso.FileExists(desktop & "\\Continuum.lnk") Then fso.DeleteFile desktop & "\\Continuum.lnk", True
 If fso.FolderExists(startMenu) Then fso.DeleteFolder startMenu, True
-shell.Run "powershell.exe -NoProfile -WindowStyle Hidden -Command ""Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*ContinuumBridge.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }""", 0, True
+shell.Run "powershell.exe -NoProfile -WindowStyle Hidden -Command ""Get-CimInstance Win32_Process | Where-Object { $_.CommandLine -like '*ContinuumApp.ps1*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force }""", 0, True
 MsgBox "Continuum removido com sucesso.", vbInformation, "Continuum"
 `);
 
-  const bridgePs1 = toCRLF(`# Continuum Native Windows Bridge (Pure .NET - Sem Node.js e Sem Terminal)
+  const nativeWinFormsAppPs1 = toCRLF(`# Continuum - Aplicativo Desktop 100% Nativo para Windows (.NET WinForms + Win32 + WebSocket)
+# Zero navegador, zero WebView, zero Node.js, zero terminal.
 Add-Type -AssemblyName System.Windows.Forms
 Add-Type -AssemblyName System.Drawing
+[System.Windows.Forms.Application]::EnableVisualStyles()
 
 Add-Type @"
 using System;
@@ -215,61 +199,49 @@ public static class ContinuumWin32 {
 
 $RoomCode = if ($env:CONTINUUM_ROOM_CODE) { $env:CONTINUUM_ROOM_CODE } else { "${room}" }
 $WsUrl = if ($env:CONTINUUM_WS_URL) { $env:CONTINUUM_WS_URL } else { "${wsUrl}" }
-$AppUrl = if ($env:CONTINUUM_APP_URL) { $env:CONTINUUM_APP_URL } else { "${appUrl}" }
-$DeviceName = $env:COMPUTERNAME
-$DeviceId = "win-native-" + ($DeviceName.ToLower() -replace '[^a-z0-9]', '')
+$DeviceName = "$($env:COMPUTERNAME) (Windows)"
+$DeviceId = "win-app-" + ($env:COMPUTERNAME.ToLower() -replace '[^a-z0-9]', '')
 $WshShell = New-Object -ComObject WScript.Shell
 $LogDir = Join-Path $env:LOCALAPPDATA "Continuum"
 if (-not (Test-Path $LogDir)) { New-Item -ItemType Directory -Path $LogDir -Force | Out-Null }
-$LogPath = Join-Path $LogDir "bridge.log"
+$LogPath = Join-Path $LogDir "continuum.log"
 
-function Write-BridgeLog($text) {
+$createdNew = $false
+$mutex = New-Object System.Threading.Mutex($true, "Global\\ContinuumNativeDesktopAppMutex", [ref]$createdNew)
+if (-not $createdNew) { exit 0 }
+
+$cBg = [System.Drawing.Color]::FromArgb(9, 11, 14)
+$cPanel = [System.Drawing.Color]::FromArgb(17, 21, 27)
+$cText = [System.Drawing.Color]::FromArgb(241, 245, 249)
+$cMuted = [System.Drawing.Color]::FromArgb(148, 163, 184)
+$cAccent = [System.Drawing.Color]::FromArgb(59, 130, 246)
+$cGreen = [System.Drawing.Color]::FromArgb(16, 185, 129)
+
+$script:Running = $true
+$script:AllowClose = $false
+$script:Ws = $null
+$script:Peers = @()
+$script:TargetId = $null
+$script:LastTrackPt = $null
+
+function Write-AppLog($text) {
   try {
-    $line = "[{0}] {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $text
+    $line = "[{0}] {1}" -f (Get-Date -Format "HH:mm:ss"), $text
     Add-Content -Path $LogPath -Value $line -Encoding UTF8
+    if ($script:LogBox -and -not $script:LogBox.IsDisposed) {
+      $script:LogBox.AppendText("$line\`r\`n")
+    }
   } catch {}
 }
 
-$createdNew = $false
-$mutex = New-Object System.Threading.Mutex($true, "Global\\ContinuumNativeBridgeMutex", [ref]$createdNew)
-if (-not $createdNew) { exit 0 }
-
-Write-BridgeLog "Iniciando ponte nativa Windows para malha $RoomCode em $WsUrl"
-
-$tray = New-Object System.Windows.Forms.NotifyIcon
-$icoFile = Join-Path $PSScriptRoot "continuum.ico"
-if (Test-Path $icoFile) {
-  try { $tray.Icon = New-Object System.Drawing.Icon($icoFile) } catch { $tray.Icon = [System.Drawing.SystemIcons]::Application }
-} else {
-  $tray.Icon = [System.Drawing.SystemIcons]::Application
-}
-$tray.Text = "Continuum - Malha $RoomCode"
-$tray.Visible = $true
-
-$menu = New-Object System.Windows.Forms.ContextMenuStrip
-$openItem = $menu.Items.Add("Abrir Continuum")
-$openItem.Add_Click({ Start-Process $AppUrl })
-$logItem = $menu.Items.Add("Abrir Log de Diagnostico")
-$logItem.Add_Click({ if (Test-Path $LogPath) { Start-Process notepad.exe $LogPath } })
-$statusItem = $menu.Items.Add("Malha: $RoomCode (Conectando...)")
-$statusItem.Enabled = $false
-$menu.Items.Add("-") | Out-Null
-$exitItem = $menu.Items.Add("Encerrar Ponte Nativa")
-$script:Running = $true
-$exitItem.Add_Click({
-  $script:Running = $false
-  $tray.Visible = $false
-  $tray.Dispose()
-  [System.Windows.Forms.Application]::Exit()
-})
-$tray.ContextMenuStrip = $menu
-
-function Send-WsJson($ws, $obj) {
-  if ($ws.State -ne [System.Net.WebSockets.WebSocketState]::Open) { return }
-  $json = ($obj | ConvertTo-Json -Depth 6 -Compress)
-  $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
-  $seg = New-Object System.ArraySegment[byte](,$bytes)
-  $ws.SendAsync($seg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [System.Threading.CancellationToken]::None).Wait(2500) | Out-Null
+function Send-WsJson($obj) {
+  if ($null -eq $script:Ws -or $script:Ws.State -ne [System.Net.WebSockets.WebSocketState]::Open) { return }
+  try {
+    $json = ($obj | ConvertTo-Json -Depth 8 -Compress)
+    $bytes = [System.Text.Encoding]::UTF8.GetBytes($json)
+    $seg = New-Object System.ArraySegment[byte](,$bytes)
+    $script:Ws.SendAsync($seg, [System.Net.WebSockets.WebSocketMessageType]::Text, $true, [System.Threading.CancellationToken]::None).Wait(1500) | Out-Null
+  } catch {}
 }
 
 function Collect-WindowsTelemetry {
@@ -346,9 +318,7 @@ function Handle-NativeInput($evt) {
         }
       }
       "click" {
-        if ($null -ne $evt.nx -and $null -ne $evt.ny) {
-          Move-CursorNormalized $evt.nx $evt.ny
-        }
+        if ($null -ne $evt.nx -and $null -ne $evt.ny) { Move-CursorNormalized $evt.nx $evt.ny }
         if ($evt.button -eq "right") {
           [ContinuumWin32]::mouse_event(0x0008, 0, 0, 0, [UIntPtr]::Zero)
           [ContinuumWin32]::mouse_event(0x0010, 0, 0, 0, [UIntPtr]::Zero)
@@ -358,8 +328,7 @@ function Handle-NativeInput($evt) {
         }
       }
       "scroll" {
-        $wheelDelta = -1 * [int]$evt.dy
-        [ContinuumWin32]::mouse_event(0x0800, 0, 0, $wheelDelta, [UIntPtr]::Zero)
+        [ContinuumWin32]::mouse_event(0x0800, 0, 0, (-1 * [int]$evt.dy), [UIntPtr]::Zero)
       }
       "text" {
         if ($evt.text) {
@@ -384,87 +353,344 @@ function Handle-NativeInput($evt) {
           "media_prev" { $WshShell.SendKeys([char]177) }
           "lock" { [ContinuumWin32]::LockWorkStation() | Out-Null }
           "ping" { [System.Media.SystemSounds]::Asterisk.Play() }
-          "open_url" {
-            if ($evt.payload -match '^https?://') { Start-Process $evt.payload }
-          }
         }
       }
     }
-  } catch {
-    Write-BridgeLog "Aviso ao processar comando remoto: $_"
-  }
+  } catch { Write-AppLog "Aviso ao executar acao Win32: $_" }
 }
 
+$form = New-Object System.Windows.Forms.Form
+$form.Text = "Continuum - Aplicativo Nativo Windows (Malha $RoomCode)"
+$form.Size = New-Object System.Drawing.Size(920, 620)
+$form.StartPosition = "CenterScreen"
+$form.BackColor = $cBg
+$form.ForeColor = $cText
+$form.Font = New-Object System.Drawing.Font("Segoe UI", 9.5)
+
+$icoFile = Join-Path $PSScriptRoot "continuum.ico"
+if (Test-Path $icoFile) {
+  try { $form.Icon = New-Object System.Drawing.Icon($icoFile) } catch {}
+}
+
+$topBar = New-Object System.Windows.Forms.Panel
+$topBar.Dock = "Top"
+$topBar.Height = 56
+$topBar.BackColor = $cPanel
+$form.Controls.Add($topBar)
+
+$titleLbl = New-Object System.Windows.Forms.Label
+$titleLbl.Text = "CONTINUUM"
+$titleLbl.Font = New-Object System.Drawing.Font("Segoe UI", 13, [System.Drawing.FontStyle]::Bold)
+$titleLbl.ForeColor = $cText
+$titleLbl.Location = New-Object System.Drawing.Point(18, 14)
+$titleLbl.AutoSize = $true
+$topBar.Controls.Add($titleLbl)
+
+$statusLbl = New-Object System.Windows.Forms.Label
+$statusLbl.Text = "Conectando a malha $RoomCode..."
+$statusLbl.ForeColor = $cMuted
+$statusLbl.Location = New-Object System.Drawing.Point(155, 19)
+$statusLbl.AutoSize = $true
+$topBar.Controls.Add($statusLbl)
+
+$roomBox = New-Object System.Windows.Forms.TextBox
+$roomBox.Text = $RoomCode
+$roomBox.Location = New-Object System.Drawing.Point(680, 14)
+$roomBox.Width = 100
+$roomBox.BackColor = $cBg
+$roomBox.ForeColor = $cText
+$roomBox.BorderStyle = "FixedSingle"
+$topBar.Controls.Add($roomBox)
+
+$reconnectBtn = New-Object System.Windows.Forms.Button
+$reconnectBtn.Text = "Reconectar"
+$reconnectBtn.Location = New-Object System.Drawing.Point(790, 12)
+$reconnectBtn.Size = New-Object System.Drawing.Size(100, 30)
+$reconnectBtn.FlatStyle = "Flat"
+$reconnectBtn.BackColor = $cAccent
+$reconnectBtn.ForeColor = $cText
+$reconnectBtn.FlatAppearance.BorderSize = 0
+$topBar.Controls.Add($reconnectBtn)
+
+$tabs = New-Object System.Windows.Forms.TabControl
+$tabs.Dock = "Fill"
+$form.Controls.Add($tabs)
+$tabs.BringToFront()
+
+$tabDevices = New-Object System.Windows.Forms.TabPage
+$tabDevices.Text = "Dispositivos"
+$tabDevices.BackColor = $cBg
+$tabs.TabPages.Add($tabDevices)
+
+$peerList = New-Object System.Windows.Forms.ListBox
+$peerList.Location = New-Object System.Drawing.Point(18, 18)
+$peerList.Size = New-Object System.Drawing.Size(860, 440)
+$peerList.BackColor = $cPanel
+$peerList.ForeColor = $cText
+$peerList.BorderStyle = "FixedSingle"
+$peerList.Font = New-Object System.Drawing.Font("Segoe UI", 10.5)
+$tabDevices.Controls.Add($peerList)
+
+$peerList.Add_SelectedIndexChanged({
+  if ($peerList.SelectedIndex -ge 0 -and $peerList.SelectedIndex -lt $script:Peers.Count) {
+    $script:TargetId = $script:Peers[$peerList.SelectedIndex].id
+    Write-AppLog "Alvo selecionado: $($script:Peers[$peerList.SelectedIndex].name)"
+  }
+})
+
+$tabRemote = New-Object System.Windows.Forms.TabPage
+$tabRemote.Text = "Controle Remoto"
+$tabRemote.BackColor = $cBg
+$tabs.TabPages.Add($tabRemote)
+
+$trackpad = New-Object System.Windows.Forms.Panel
+$trackpad.Location = New-Object System.Drawing.Point(18, 18)
+$trackpad.Size = New-Object System.Drawing.Size(860, 310)
+$trackpad.BackColor = $cPanel
+$trackpad.BorderStyle = "FixedSingle"
+$tabRemote.Controls.Add($trackpad)
+
+$tpHint = New-Object System.Windows.Forms.Label
+$tpHint.Text = "TRACKPAD NATIVO WINDOWS — Arraste para mover o cursor remoto, clique esquerdo/direito no alvo selecionado"
+$tpHint.ForeColor = $cMuted
+$tpHint.Location = New-Object System.Drawing.Point(16, 16)
+$tpHint.AutoSize = $true
+$trackpad.Controls.Add($tpHint)
+
+$trackpad.Add_MouseDown({
+  param($s, $e)
+  $script:LastTrackPt = $e.Location
+})
+$trackpad.Add_MouseMove({
+  param($s, $e)
+  if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Left -and $null -ne $script:LastTrackPt -and $script:TargetId) {
+    $dx = ($e.X - $script:LastTrackPt.X) * 2
+    $dy = ($e.Y - $script:LastTrackPt.Y) * 2
+    $script:LastTrackPt = $e.Location
+    Send-WsJson @{ type = "input:event"; targetId = $script:TargetId; input = @{ kind = "move"; dx = $dx; dy = $dy } }
+  }
+})
+$trackpad.Add_MouseClick({
+  param($s, $e)
+  if ($script:TargetId) {
+    $btn = if ($e.Button -eq [System.Windows.Forms.MouseButtons]::Right) { "right" } else { "left" }
+    Send-WsJson @{ type = "input:event"; targetId = $script:TargetId; input = @{ kind = "click"; button = $btn } }
+  }
+})
+
+$cmdDefs = @(
+  @("Vol -", "vol_down", 18),
+  @("Vol +", "vol_up", 128),
+  @("Mudo", "vol_mute", 238),
+  @("Play/Pause", "media_play_pause", 348),
+  @("Proxima", "media_next", 478),
+  @("Bloquear Tela", "lock", 588),
+  @("Tocar Alerta", "ping", 728)
+)
+foreach ($d in $cmdDefs) {
+  $b = New-Object System.Windows.Forms.Button
+  $b.Text = $d[0]
+  $b.Tag = $d[1]
+  $b.Location = New-Object System.Drawing.Point($d[2], 344)
+  $b.Size = New-Object System.Drawing.Size(102, 34)
+  $b.FlatStyle = "Flat"
+  $b.BackColor = $cPanel
+  $b.ForeColor = $cText
+  $b.Add_Click({
+    param($sender, $args)
+    if ($script:TargetId) {
+      Send-WsJson @{ type = "input:event"; targetId = $script:TargetId; input = @{ kind = "command"; action = $sender.Tag } }
+      Write-AppLog "Comando enviado: $($sender.Tag)"
+    }
+  })
+  $tabRemote.Controls.Add($b)
+}
+
+$remoteTxt = New-Object System.Windows.Forms.TextBox
+$remoteTxt.Location = New-Object System.Drawing.Point(18, 396)
+$remoteTxt.Size = New-Object System.Drawing.Size(720, 28)
+$remoteTxt.BackColor = $cPanel
+$remoteTxt.ForeColor = $cText
+$tabRemote.Controls.Add($remoteTxt)
+
+$sendTxtBtn = New-Object System.Windows.Forms.Button
+$sendTxtBtn.Text = "Enviar Texto"
+$sendTxtBtn.Location = New-Object System.Drawing.Point(748, 394)
+$sendTxtBtn.Size = New-Object System.Drawing.Size(130, 30)
+$sendTxtBtn.FlatStyle = "Flat"
+$sendTxtBtn.BackColor = $cAccent
+$sendTxtBtn.ForeColor = $cText
+$sendTxtBtn.Add_Click({
+  if ($script:TargetId -and $remoteTxt.Text) {
+    Send-WsJson @{ type = "input:event"; targetId = $script:TargetId; input = @{ kind = "text"; text = $remoteTxt.Text } }
+    $remoteTxt.Clear()
+  }
+})
+$tabRemote.Controls.Add($sendTxtBtn)
+
+$tabClip = New-Object System.Windows.Forms.TabPage
+$tabClip.Text = "Clipboard & Arquivos"
+$tabClip.BackColor = $cBg
+$tabs.TabPages.Add($tabClip)
+
+$clipBox = New-Object System.Windows.Forms.TextBox
+$clipBox.Multiline = $true
+$clipBox.Location = New-Object System.Drawing.Point(18, 18)
+$clipBox.Size = New-Object System.Drawing.Size(860, 280)
+$clipBox.BackColor = $cPanel
+$clipBox.ForeColor = $cText
+$tabClip.Controls.Add($clipBox)
+
+$sendClipBtn = New-Object System.Windows.Forms.Button
+$sendClipBtn.Text = "Enviar Clipboard para Malha"
+$sendClipBtn.Location = New-Object System.Drawing.Point(18, 314)
+$sendClipBtn.Size = New-Object System.Drawing.Size(220, 36)
+$sendClipBtn.FlatStyle = "Flat"
+$sendClipBtn.BackColor = $cAccent
+$sendClipBtn.ForeColor = $cText
+$sendClipBtn.Add_Click({
+  $txt = $clipBox.Text
+  if (-not $txt) { try { $txt = [System.Windows.Forms.Clipboard]::GetText() } catch {} }
+  if ($txt) {
+    Send-WsJson @{ type = "clipboard:push"; item = @{ id = [Guid]::NewGuid().ToString(); text = $txt; sourceName = $DeviceName; timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() } }
+    Write-AppLog "Clipboard sincronizado com a malha."
+  }
+})
+$tabClip.Controls.Add($sendClipBtn)
+
+$tabSys = New-Object System.Windows.Forms.TabPage
+$tabSys.Text = "Sistema & Log"
+$tabSys.BackColor = $cBg
+$tabs.TabPages.Add($tabSys)
+
+$script:LogBox = New-Object System.Windows.Forms.TextBox
+$script:LogBox.Multiline = $true
+$script:LogBox.ReadOnly = $true
+$script:LogBox.ScrollBars = "Vertical"
+$script:LogBox.Location = New-Object System.Drawing.Point(18, 18)
+$script:LogBox.Size = New-Object System.Drawing.Size(860, 440)
+$script:LogBox.BackColor = $cPanel
+$script:LogBox.ForeColor = $cMuted
+$script:LogBox.Font = New-Object System.Drawing.Font("Consolas", 9.5)
+$tabSys.Controls.Add($script:LogBox)
+
+$tray = New-Object System.Windows.Forms.NotifyIcon
+$tray.Icon = if ($form.Icon) { $form.Icon } else { [System.Drawing.SystemIcons]::Application }
+$tray.Text = "Continuum - Malha $RoomCode"
+$tray.Visible = $true
+
+$menu = New-Object System.Windows.Forms.ContextMenuStrip
+$openItem = $menu.Items.Add("Abrir Continuum")
+$openItem.Add_Click({ $form.Show(); $form.WindowState = "Normal"; $form.Activate() })
+$exitItem = $menu.Items.Add("Encerrar Continuum")
+$exitItem.Add_Click({ $script:AllowClose = $true; $script:Running = $false; $form.Close() })
+$tray.ContextMenuStrip = $menu
+$tray.Add_DoubleClick({ $form.Show(); $form.WindowState = "Normal"; $form.Activate() })
+
+$form.Add_FormClosing({
+  param($s, $e)
+  if (-not $script:AllowClose) {
+    $e.Cancel = $true
+    $form.Hide()
+  } else {
+    $script:Running = $false
+    $tray.Visible = $false
+    $tray.Dispose()
+  }
+})
+
+$reconnectBtn.Add_Click({
+  $RoomCode = $roomBox.Text.Trim().ToUpper()
+  if ($script:Ws) { try { $script:Ws.Abort() } catch {} }
+  Write-AppLog "Reconectando na malha $RoomCode..."
+})
+
+$form.Show()
+Write-AppLog "Continuum Desktop Nativo Windows iniciado (Malha: $RoomCode)."
+
 $buffer = New-Object byte[] 65536
-while ($script:Running) {
-  $ws = New-Object System.Net.WebSockets.ClientWebSocket
-  $ws.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(20)
+while ($script:Running -and -not $form.IsDisposed) {
+  $script:Ws = New-Object System.Net.WebSockets.ClientWebSocket
+  $script:Ws.Options.KeepAliveInterval = [TimeSpan]::FromSeconds(20)
   try {
-    $uri = [Uri]$WsUrl
-    $connectTask = $ws.ConnectAsync($uri, [System.Threading.CancellationToken]::None)
+    $statusLbl.Text = "Conectando a malha $RoomCode..."
+    $statusLbl.ForeColor = $cMuted
+    $connectTask = $script:Ws.ConnectAsync([Uri]$WsUrl, [System.Threading.CancellationToken]::None)
     while (-not $connectTask.IsCompleted -and $script:Running) {
       [System.Windows.Forms.Application]::DoEvents()
-      Start-Sleep -Milliseconds 40
+      Start-Sleep -Milliseconds 30
     }
-    if ($connectTask.IsFaulted) {
-      throw $connectTask.Exception.InnerException
-    }
-    if ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
-      $statusItem.Text = "Malha: $RoomCode (Conectado)"
-      Write-BridgeLog "Conectado com sucesso a malha $RoomCode."
-      Send-WsJson $ws @{
-        type = "companion:register"
+    if ($connectTask.IsFaulted) { throw $connectTask.Exception.InnerException }
+
+    if ($script:Ws.State -eq [System.Net.WebSockets.WebSocketState]::Open) {
+      $statusLbl.Text = "Conectado na malha $RoomCode (Win32 Nativo)"
+      $statusLbl.ForeColor = $cGreen
+      $tray.Text = "Continuum - Conectado ($RoomCode)"
+      Write-AppLog "Conectado com sucesso em $WsUrl"
+
+      $tel = Collect-WindowsTelemetry
+      Send-WsJson @{
+        type = "mesh:join"
         roomCode = $RoomCode
-        deviceId = $DeviceId
-        name = $DeviceName
-        os = "windows"
-        displayServer = "win32"
+        device = @{
+          id = $DeviceId
+          name = $DeviceName
+          os = "windows"
+          deviceType = "desktop"
+          status = "online"
+          companionConnected = $true
+          telemetry = $tel
+        }
       }
 
-      $lastTelemetry = [DateTime]::MinValue
+      $lastTelemetry = [DateTime]::UtcNow
       $msgStream = New-Object System.IO.MemoryStream
       $seg = New-Object System.ArraySegment[byte](,$buffer)
-      $recvTask = $ws.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
+      $recvTask = $script:Ws.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
 
-      while ($ws.State -eq [System.Net.WebSockets.WebSocketState]::Open -and $script:Running) {
+      while ($script:Ws.State -eq [System.Net.WebSockets.WebSocketState]::Open -and $script:Running) {
         [System.Windows.Forms.Application]::DoEvents()
-
         if (([DateTime]::UtcNow - $lastTelemetry).TotalSeconds -ge 4) {
           $lastTelemetry = [DateTime]::UtcNow
-          Send-WsJson $ws @{
-            type = "companion:telemetry"
-            telemetry = (Collect-WindowsTelemetry)
-          }
+          Send-WsJson @{ type = "device:telemetry"; telemetry = (Collect-WindowsTelemetry) }
         }
-
         if ($recvTask.IsCompleted) {
           if ($recvTask.IsFaulted) { throw $recvTask.Exception.InnerException }
           $res = $recvTask.Result
           if ($res.MessageType -eq [System.Net.WebSockets.WebSocketMessageType]::Close) { break }
-          if ($res.Count -gt 0) {
-            $msgStream.Write($buffer, 0, $res.Count)
-          }
+          if ($res.Count -gt 0) { $msgStream.Write($buffer, 0, $res.Count) }
           if ($res.EndOfMessage) {
             $txt = [System.Text.Encoding]::UTF8.GetString($msgStream.ToArray())
             $msgStream.SetLength(0)
             try {
               $msg = $txt | ConvertFrom-Json
-              if ($msg.type -eq "input:event" -and $msg.input) {
+              if ($msg.type -eq "mesh:state" -and $msg.devices) {
+                $script:Peers = @($msg.devices | Where-Object { $_.id -ne $DeviceId })
+                $peerList.Items.Clear()
+                foreach ($p in $script:Peers) {
+                  $peerList.Items.Add("$($p.name) [$($p.os)] - CPU $($p.telemetry.cpuUsage)%") | Out-Null
+                }
+                if (-not $script:TargetId -and $script:Peers.Count -gt 0) { $script:TargetId = $script:Peers[0].id }
+              } elseif ($msg.type -eq "input:event" -and $msg.input) {
                 Handle-NativeInput $msg.input
+              } elseif ($msg.type -eq "clipboard:push" -and $msg.item -and $msg.item.text) {
+                $clipBox.Text = $msg.item.text
+                try { [System.Windows.Forms.Clipboard]::SetText($msg.item.text) } catch {}
               }
             } catch {}
           }
-          $recvTask = $ws.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
+          $recvTask = $script:Ws.ReceiveAsync($seg, [System.Threading.CancellationToken]::None)
         }
         Start-Sleep -Milliseconds 20
       }
       $msgStream.Dispose()
     }
   } catch {
-    $statusItem.Text = "Malha: $RoomCode (Reconectando...)"
-    Write-BridgeLog "Falha de conexao WebSocket: $_"
+    $statusLbl.Text = "Reconectando na malha $RoomCode..."
+    $statusLbl.ForeColor = $cMuted
+    Write-AppLog "Conexao interrompida: $_"
   } finally {
-    try { $ws.Dispose() } catch {}
+    try { $script:Ws.Dispose() } catch {}
   }
 
   for ($w = 0; $w -lt 60 -and $script:Running; $w++) {
@@ -474,32 +700,41 @@ while ($script:Running) {
 }
 `);
 
-  const readmeTxt = toCRLF(`CONTINUUM PARA WINDOWS (PLUG-AND-PLAY)
-======================================
+  const readmeTxt = toCRLF(`CONTINUUM PARA WINDOWS — APLICATIVO 100% NATIVO (SEM NAVEGADOR / SEM WEBVIEW)
+=============================================================================
 
-Como instalar (sem terminal e sem instalar Node.js):
+Como instalar (plug-and-play, sem terminal e sem Node.js):
 1. Extraia todos os arquivos deste ZIP para uma pasta.
 2. De dois cliques em "Instalar Continuum.vbs".
-3. Pronto! O Continuum cria o atalho com icone proprio na Area de Trabalho e no Menu Iniciar,
-   inicia a ponte nativa na bandeja do Windows e abre o app em janela dedicada.
+3. Pronto! O Continuum cria o atalho com icone proprio na Area de Trabalho e no Menu Iniciar
+   e abre o aplicativo desktop nativo Windows (WinForms + Win32 + Bandeja do Sistema).
+
+Compilacao para .exe unico (.NET 8 opcional ou via GitHub Actions):
+- A pasta "source/" contem o projeto C# .NET 8 (Continuum.Windows.csproj + Program.cs + installer.nsi)
+  usado pelo GitHub Actions para compilar Continuum-Windows.exe e Continuum-Windows-Setup.exe.
 
 Malha configurada automaticamente: ${room}
-Servidor: ${ctx.appUrl}
-Log de diagnostico: %LOCALAPPDATA%\\Continuum\\bridge.log
+Servidor: ${appUrl}
+Log de diagnostico: %LOCALAPPDATA%\\Continuum\\continuum.log
 Para remover a qualquer momento, execute "Desinstalar Continuum.vbs".
 `);
 
   const entries: ZipEntryInput[] = [
     { name: 'Continuum-Windows/Instalar Continuum.vbs', content: installVbs },
     { name: 'Continuum-Windows/Continuum.vbs', content: launcherVbs },
-    { name: 'Continuum-Windows/ContinuumBridge.ps1', content: bridgePs1 },
+    { name: 'Continuum-Windows/ContinuumApp.ps1', content: nativeWinFormsAppPs1 },
     { name: 'Continuum-Windows/Desinstalar Continuum.vbs', content: uninstallVbs },
     { name: 'Continuum-Windows/LEIA-ME.txt', content: readmeTxt },
+    { name: 'Continuum-Windows/source/Continuum.Windows.csproj', content: buildWindowsNativeCsproj() },
+    { name: 'Continuum-Windows/source/Program.cs', content: buildWindowsNativeProgramCs(ctx) },
+    { name: 'Continuum-Windows/source/installer.nsi', content: buildWindowsNsisScript() },
   ];
 
   const png192 = readPublicAsset('pwa-192x192.png');
   if (png192) {
-    entries.push({ name: 'Continuum-Windows/continuum.ico', content: buildIcoFromPng(png192) });
+    const ico = buildIcoFromPng(png192);
+    entries.push({ name: 'Continuum-Windows/continuum.ico', content: ico });
+    entries.push({ name: 'Continuum-Windows/source/continuum.ico', content: ico });
   }
   const svg = readPublicAsset('icon.svg');
   if (svg) entries.push({ name: 'Continuum-Windows/continuum.svg', content: svg });
@@ -947,33 +1182,32 @@ fi
 }
 
 /**
- * LINUX NATIVE `.deb` PACKAGE (Ubuntu, Debian, Linux Mint, Pop!_OS, Zorin, Elementary)
- * Double-click -> Opens Software Center / Discover / GDebi -> 1 click "Install" -> Zero terminal!
+ * LINUX NATIVE `.deb` PACKAGE (Ubuntu, Debian, Linux Mint, Pop!_OS, Zorin OS)
+ * 100% Native GTK 3 Desktop Application — ZERO browser / ZERO WebView!
  */
 export function buildLinuxDebPackage(ctx: InstallerContext): Buffer {
   const room = safeStr(ctx.roomCode);
-  const appUrl = safeStr(`${ctx.appUrl}/?room=${room}`);
-  const wsUrl = safeStr(ctx.wsUrl);
-
-  const bridgePy = buildLinuxBridgePython(room, wsUrl);
-  const launchBin = buildLinuxLauncherScript('/usr/share/continuum/continuum_bridge.py', appUrl);
+  const nativeAppPy = buildLinuxNativeAppPy(ctx);
+  const launchBin = `#!/usr/bin/env bash
+exec python3 /usr/share/continuum/continuum_app.py "$@"
+`;
 
   const desktopEntry = `[Desktop Entry]
 Type=Application
 Version=1.0
 Name=Continuum
-GenericName=Second Screen and Device Mesh
-Comment=Ecossistema Multiplataforma e Monitor Secundario sem Fio (Malha ${room})
+GenericName=Native Device Mesh
+Comment=Aplicativo Nativo Linux para Malha de Dispositivos e Controle Remoto (Malha ${room})
 Exec=/usr/bin/continuum
 Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
-StartupWMClass=Continuum
+StartupWMClass=continuum_app.py
 `;
 
   const dataEntries: TarEntry[] = [
     { name: './usr/bin/continuum', content: launchBin, mode: 0o755 },
-    { name: './usr/share/continuum/continuum_bridge.py', content: bridgePy, mode: 0o755 },
+    { name: './usr/share/continuum/continuum_app.py', content: nativeAppPy, mode: 0o755 },
     { name: './usr/share/applications/continuum.desktop', content: desktopEntry, mode: 0o644 },
   ];
 
@@ -999,21 +1233,22 @@ StartupWMClass=Continuum
     (acc, item) => acc + (typeof item.content === 'string' ? Buffer.byteLength(item.content, 'utf8') : item.content.length),
     0
   );
-  const installedSizeKb = Math.max(16, Math.ceil(totalBytes / 1024));
+  const installedSizeKb = Math.max(24, Math.ceil(totalBytes / 1024));
 
   const controlFile = `Package: continuum-mesh
-Version: 1.1.1
+Version: 2.0.0
 Section: utils
 Priority: optional
 Architecture: all
 Installed-Size: ${installedSizeKb}
-Depends: python3
-Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl
+Depends: python3, python3-gi, gir1.2-gtk-3.0
+Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
 Homepage: ${ctx.appUrl}
-Description: Continuum - Ecossistema Multiplataforma e Second Screen
- Aplicativo multiplataforma em tempo real para integracao de dispositivos,
- Second Screen sem fio, controle remoto de mouse/teclado e transferencia de arquivos.
+Description: Continuum - Aplicativo Nativo Linux (GTK 3)
+ Aplicativo desktop nativo em GTK 3 (sem navegador e sem WebView) para malha
+ de dispositivos em tempo real, trackpad/teclado remoto, clipboard universal,
+ transferencia de arquivos e controle nativo do sistema operacional.
  Malha configurada: ${room}
 `;
 
@@ -1030,7 +1265,7 @@ exit 0
 
   const postrm = `#!/bin/sh
 set -e
-pkill -f "/usr/share/continuum/continuum_bridge.py" >/dev/null 2>&1 || true
+pkill -f "/usr/share/continuum/continuum_app.py" >/dev/null 2>&1 || true
 if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database /usr/share/applications >/dev/null 2>&1 || true
 fi
@@ -1114,14 +1349,14 @@ mkdir -p "$APP_DIR" "$DESKTOP_DIR" 2>/dev/null || {
 }
 
 {
-  echo "[Continuum] Instalando a partir de: $SRC_DIR"
+  echo "[Continuum] Instalando aplicativo nativo GTK 3 a partir de: $SRC_DIR"
   cp -f "$SRC_DIR/continuum-launch.sh" "$APP_DIR/continuum-launch.sh"
-  cp -f "$SRC_DIR/continuum_bridge.py" "$APP_DIR/continuum_bridge.py"
+  cp -f "$SRC_DIR/continuum_app.py" "$APP_DIR/continuum_app.py"
   cp -f "$SRC_DIR/uninstall-gui.sh" "$APP_DIR/uninstall-gui.sh"
   if [ -f "$SRC_DIR/continuum.svg" ]; then
     cp -f "$SRC_DIR/continuum.svg" "$APP_DIR/continuum.svg"
   fi
-  chmod +x "$APP_DIR/continuum-launch.sh" "$APP_DIR/continuum_bridge.py" "$APP_DIR/uninstall-gui.sh"
+  chmod +x "$APP_DIR/continuum-launch.sh" "$APP_DIR/continuum_app.py" "$APP_DIR/uninstall-gui.sh"
 } >"$LOG_FILE" 2>&1 || {
   show_dialog "error" "Erro ao copiar arquivos do Continuum. Veja o log em: $LOG_FILE"
   exit 1
@@ -1137,13 +1372,13 @@ cat > "$DESKTOP_DIR/continuum.desktop" <<EOF
 Type=Application
 Version=1.0
 Name=Continuum
-GenericName=Second Screen and Device Mesh
-Comment=Ecossistema Multiplataforma e Monitor Secundario sem Fio (Malha ${room})
+GenericName=Native Device Mesh
+Comment=Aplicativo Nativo Linux GTK 3 (Malha ${room})
 Exec=$APP_DIR/continuum-launch.sh
 Icon=$ICON_PATH
 Terminal=false
 Categories=Network;Utility;System;
-StartupWMClass=Continuum
+StartupWMClass=continuum_app.py
 EOF
 
 chmod +x "$DESKTOP_DIR/continuum.desktop" || true
@@ -1164,7 +1399,7 @@ if command -v update-desktop-database >/dev/null 2>&1; then
   update-desktop-database "$DESKTOP_DIR" >/dev/null 2>&1 || true
 fi
 
-MSG="$(printf 'Continuum instalado no Menu de Aplicativos!\n\nMalha pareada: %s\nO aplicativo sera aberto agora.' '${room}')"
+MSG="$(printf 'Continuum (App Nativo GTK 3) instalado no Menu de Aplicativos!\n\nMalha pareada: %s\nO aplicativo sera aberto agora.' '${room}')"
 show_dialog "info" "$MSG"
 
 nohup "$APP_DIR/continuum-launch.sh" >/dev/null 2>&1 &
@@ -1173,7 +1408,7 @@ exit 0
 
   const uninstallGuiSh = `#!/usr/bin/env bash
 rm -rf "$HOME/.local/share/continuum" "$HOME/.local/share/applications/continuum.desktop"
-pkill -f "continuum_bridge.py" >/dev/null 2>&1 || true
+pkill -f "continuum_app.py" >/dev/null 2>&1 || true
 if command -v zenity >/dev/null 2>&1; then
   zenity --info --title="Continuum" --text="Continuum removido com sucesso." --width=300 2>/dev/null || true
 elif command -v kdialog >/dev/null 2>&1; then
@@ -1183,31 +1418,32 @@ elif command -v notify-send >/dev/null 2>&1; then
 fi
 `;
 
-  const launchSh = buildLinuxLauncherScript('$HOME/.local/share/continuum/continuum_bridge.py', appUrl);
-  const bridgePy = buildLinuxBridgePython(room, wsUrl);
+  const launchSh = `#!/usr/bin/env bash
+exec python3 "$HOME/.local/share/continuum/continuum_app.py" "$@"
+`;
+  const nativeAppPy = buildLinuxNativeAppPy(ctx);
 
-  const readmeTxt = `CONTINUUM PARA LINUX (PACOTE UNIVERSAL)
-=======================================
+  const readmeTxt = `CONTINUUM PARA LINUX (APLICATIVO NATIVO GTK 3 — SEM NAVEGADOR)
+==============================================================
 
 Para Ubuntu, Debian, Mint, Pop!_OS e Zorin OS:
-- Recomendamos usar o instalador direto "Continuum-Linux.deb" (basta dar dois cliques).
+- Recomendamos usar o instalador direto "Continuum-Linux.deb" (dois cliques).
 
 Para Fedora, Arch, Manjaro, openSUSE e outras distros (este ZIP):
 1. Extraia todos os arquivos deste ZIP em uma pasta.
 2. Clique com o botao direito em "Instalar-Continuum.desktop" -> "Permitir Iniciar"
-   (ou "Executar como programa" em "install-gui.sh") e de dois cliques.
-3. O Continuum e registrado automaticamente no seu Menu de Aplicativos ja conectado
-   a malha ${room}.
+   (ou execute "install-gui.sh") e de dois cliques.
+3. O Continuum nativo GTK 3 sera aberto e registrado no Menu de Aplicativos (Malha ${room}).
 
 Servidor configurado: ${ctx.appUrl}
-Log de diagnostico: ~/.local/share/continuum/bridge.log
+Log de diagnostico: ~/.local/share/continuum/app.log
 `;
 
   const entries: ZipEntryInput[] = [
     { name: 'Continuum-Linux/Instalar-Continuum.desktop', content: installDesktop, executable: true },
     { name: 'Continuum-Linux/install-gui.sh', content: installGuiSh, executable: true },
     { name: 'Continuum-Linux/continuum-launch.sh', content: launchSh, executable: true },
-    { name: 'Continuum-Linux/continuum_bridge.py', content: bridgePy, executable: true },
+    { name: 'Continuum-Linux/continuum_app.py', content: nativeAppPy, executable: true },
     { name: 'Continuum-Linux/uninstall-gui.sh', content: uninstallGuiSh, executable: true },
     { name: 'Continuum-Linux/LEIA-ME.txt', content: readmeTxt },
   ];
@@ -1219,172 +1455,18 @@ Log de diagnostico: ~/.local/share/continuum/bridge.log
 }
 
 /**
- * ANDROID NATIVE KOTLIN APP PROJECT PACKAGE (Pre-configured for 1-click APK build via GitHub Actions or Android Studio)
+ * ANDROID 100% NATIVE KOTLIN APP PROJECT PACKAGE (ZERO WebView — Native UI + OkHttp WebSocket + Multi-Touch Trackpad)
  */
 export function buildAndroidNativeZip(ctx: InstallerContext): Buffer {
   const room = safeStr(ctx.roomCode);
-  const appUrl = safeStr(`${ctx.appUrl}/?room=${room}&platform=android-native`);
-
-  const manifestXml = `<?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-    <uses-permission android:name="android.permission.INTERNET" />
-    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
-    <uses-permission android:name="android.permission.WAKE_LOCK" />
-    <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
-
-    <application
-        android:allowBackup="true"
-        android:label="Continuum"
-        android:supportsRtl="true"
-        android:theme="@style/Theme.Material3.Dark.NoActionBar"
-        android:usesCleartextTraffic="true">
-        <activity
-            android:name=".MainActivity"
-            android:configChanges="orientation|screenSize|keyboardHidden|smallestScreenSize"
-            android:exported="true"
-            android:hardwareAccelerated="true"
-            android:launchMode="singleTask">
-            <intent-filter>
-                <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-        </activity>
-    </application>
-</manifest>
-`;
-
-  const mainActivityKt = `package app.continuum.mesh
-
-import android.annotation.SuppressLint
-import android.content.Intent
-import android.content.IntentFilter
-import android.os.BatteryManager
-import android.os.Build
-import android.os.Bundle
-import android.view.WindowManager
-import android.webkit.JavascriptInterface
-import android.webkit.PermissionRequest
-import android.webkit.WebChromeClient
-import android.webkit.WebSettings
-import android.webkit.WebView
-import android.webkit.WebViewClient
-import androidx.appcompat.app.AppCompatActivity
-import androidx.core.view.WindowCompat
-import androidx.core.view.WindowInsetsCompat
-import androidx.core.view.WindowInsetsControllerCompat
-
-class MainActivity : AppCompatActivity() {
-    private lateinit var webView: WebView
-
-    @SuppressLint("SetJavaScriptEnabled")
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-
-        WindowCompat.setDecorFitsSystemWindows(window, false)
-        val controller = WindowInsetsControllerCompat(window, window.decorView)
-        controller.hide(WindowInsetsCompat.Type.systemBars())
-        controller.systemBarsBehavior =
-            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-
-        webView = WebView(this)
-        setContentView(webView)
-
-        val settings: WebSettings = webView.settings
-        settings.javaScriptEnabled = true
-        settings.domStorageEnabled = true
-        settings.mediaPlaybackRequiresUserGesture = false
-        settings.allowFileAccess = true
-
-        webView.addJavascriptInterface(NativeDeviceBridge(), "ContinuumAndroid")
-        webView.webViewClient = WebViewClient()
-        webView.webChromeClient = object : WebChromeClient() {
-            override fun onPermissionRequest(request: PermissionRequest) {
-                request.grant(request.resources)
-            }
-        }
-
-        webView.loadUrl("${appUrl}")
-    }
-
-    inner class NativeDeviceBridge {
-        @JavascriptInterface
-        fun getDeviceModel(): String = "\${Build.MANUFACTURER} \${Build.MODEL}"
-
-        @JavascriptInterface
-        fun getBatteryPercent(): Int {
-            val intent = registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
-            val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
-            val scale = intent?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
-            return if (level >= 0 && scale > 0) (level * 100) / scale else -1
-        }
-    }
-}
-`;
-
-  const appBuildGradle = `plugins {
-    id("com.android.application") version "8.7.2"
-    id("org.jetbrains.kotlin.android") version "2.0.21"
-}
-
-android {
-    namespace = "app.continuum.mesh"
-    compileSdk = 35
-
-    defaultConfig {
-        applicationId = "app.continuum.mesh"
-        minSdk = 26
-        targetSdk = 35
-        versionCode = 1
-        versionName = "1.1.0"
-    }
-
-    buildTypes {
-        release {
-            isMinifyEnabled = false
-        }
-    }
-
-    compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_17
-        targetCompatibility = JavaVersion.VERSION_17
-    }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
-}
-
-dependencies {
-    implementation("androidx.core:core-ktx:1.15.0")
-    implementation("androidx.appcompat:appcompat:1.7.0")
-    implementation("com.google.android.material:material:1.12.0")
-}
-`;
-
-  const settingsGradle = `pluginManagement {
-    repositories {
-        google()
-        mavenCentral()
-        gradlePluginPortal()
-    }
-}
-dependencyResolutionManagement {
-    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
-    repositories {
-        google()
-        mavenCentral()
-    }
-}
-rootProject.name = "ContinuumAndroid"
-include(":app")
-`;
+  const png192 = readPublicAsset('pwa-192x192.png');
+  const projectEntries = buildAndroidNativeProjectEntries(ctx, png192, 'Continuum-Android');
 
   const ghWorkflow = `name: Build Continuum Android APK
 on:
   workflow_dispatch:
   push:
-    branches: [ main ]
+    branches: [ main, master ]
 jobs:
   build-apk:
     runs-on: ubuntu-latest
@@ -1395,35 +1477,36 @@ jobs:
           distribution: temurin
           java-version: '17'
       - uses: gradle/actions/setup-gradle@v4
-      - name: Build Debug APK
-        run: gradle assembleDebug
+        with:
+          gradle-version: 8.7
+      - name: Build Native Android APK
+        run: gradle assembleDebug --no-daemon
       - uses: actions/upload-artifact@v4
         with:
           name: Continuum-Android-APK
           path: app/build/outputs/apk/debug/*.apk
 `;
 
-  const readmeTxt = `CONTINUUM PARA ANDROID - PROJETO NATIVO KOTLIN (APK)
-====================================================
+  const readmeTxt = `CONTINUUM PARA ANDROID — APLICATIVO 100% NATIVO KOTLIN (SEM WEBVIEW)
+====================================================================
 
-Este pacote contem o aplicativo Android nativo em Kotlin ja configurado
-para a malha ${room} (${ctx.appUrl}), com modo imersivo tela cheia, tela sempre ativa
-(FLAG_KEEP_SCREEN_ON) para Second Screen e ponte nativa de bateria/modelo.
+Este projeto compila um aplicativo Android 100% nativo em Kotlin + OkHttp WebSocket
+(SEM WebView e SEM navegador), com:
+- Interface nativa escura (Malha, Trackpad Multi-Toque, Arquivos & Clipboard, Alertas)
+- Trackpad nativo multi-toque para controlar o cursor do Linux/Windows
+- Sincronizacao nativa com ClipboardManager e envio/recebimento de arquivos
+- Telemetria real de bateria (BatteryManager) e tela sempre ativa (FLAG_KEEP_SCREEN_ON)
 
-Opcao mais rapida no celular (Zero compilacao):
-- Abra o Continuum no Chrome do Android usando o QR Code e toque em "Instalar App".
-  O Android instala automaticamente um WebAPK nativo na sua gaveta de apps.
+Servidor padrao: ${ctx.appUrl}
+Malha padrao: ${room}
 
-Para gerar o arquivo .APK assinavel sem usar terminal:
-1. Abra esta pasta no Android Studio e clique em Build -> Build APK(s); OU
-2. Suba para um repositorio GitHub e clique em Actions -> Build Continuum Android APK.
+Para gerar o arquivo .APK:
+1. Abra no Android Studio e clique em Build -> Build APK(s); OU
+2. Suba no GitHub e execute Actions -> Build Continuum Android APK.
 `;
 
   return buildZipBuffer([
-    { name: 'Continuum-Android/settings.gradle.kts', content: settingsGradle },
-    { name: 'Continuum-Android/app/build.gradle.kts', content: appBuildGradle },
-    { name: 'Continuum-Android/app/src/main/AndroidManifest.xml', content: manifestXml },
-    { name: 'Continuum-Android/app/src/main/java/app/continuum/mesh/MainActivity.kt', content: mainActivityKt },
+    ...projectEntries,
     { name: 'Continuum-Android/.github/workflows/build-apk.yml', content: ghWorkflow },
     { name: 'Continuum-Android/LEIA-ME.txt', content: readmeTxt },
   ]);

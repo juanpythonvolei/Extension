@@ -436,7 +436,7 @@ async function bootstrap() {
       wsUrl: endpoints.wsUrl,
       isPrivatePreview: endpoints.isPrivatePreview,
       browserClientsCount: room ? room.clients.size : 0,
-      companionCount: room ? room.companions.size : 0,
+      companionCount: Math.max(room ? room.companions.size : 0, companionDevices.length),
       totalDevicesInRoom: roomDevices.length,
       companionDevices,
       timestamp: Date.now(),
@@ -598,7 +598,10 @@ async function bootstrap() {
           y: typeof rawDevice.y === 'number' && room.devices.has(deviceId) ? rawDevice.y : slot.y,
           isPrimary,
           edgeFlowEnabled: existingNode?.edgeFlowEnabled ?? true,
-          companionConnected: room.companions.has(deviceId) || Boolean(existingNode?.companionConnected),
+          companionConnected:
+            room.companions.has(deviceId) ||
+            Boolean(existingNode?.companionConnected) ||
+            Boolean(rawDevice.companionConnected),
           online: true,
           connectedAt: existingNode?.connectedAt ?? Date.now(),
           lastSeenAt: Date.now(),
@@ -614,8 +617,14 @@ async function bootstrap() {
             rttMs: rawDevice.telemetry?.rttMs ?? null,
             volume: typeof rawDevice.telemetry?.volume === 'number' ? rawDevice.telemetry.volume : 72,
             brightness: typeof rawDevice.telemetry?.brightness === 'number' ? rawDevice.telemetry.brightness : 85,
-            displayServer: existingNode?.telemetry.displayServer ?? 'web',
-            companionLastSeenAt: existingNode?.telemetry.companionLastSeenAt ?? null,
+            displayServer:
+              rawDevice.telemetry?.displayServer && rawDevice.telemetry.displayServer !== 'web'
+                ? rawDevice.telemetry.displayServer
+                : existingNode?.telemetry.displayServer ?? 'web',
+            companionLastSeenAt:
+              rawDevice.companionConnected
+                ? Date.now()
+                : existingNode?.telemetry.companionLastSeenAt ?? null,
             openApps: [
               ...(existingNode?.telemetry.openApps ?? []).filter((a) => a.source === 'os-agent'),
               ...(Array.isArray(rawDevice.telemetry?.openApps) ? rawDevice.telemetry.openApps : []),

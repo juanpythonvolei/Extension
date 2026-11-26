@@ -787,12 +787,12 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
             <div className="mt-5 space-y-5">
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
-                  <h2 className="text-sm font-semibold text-[#F1F5F9]">Instalador Nativo Linux (.DEB · v1.1.1 — Zorin OS / Ubuntu / Debian)</h2>
+                  <h2 className="text-sm font-semibold text-[#F1F5F9]">Aplicativo Nativo Linux GTK 3 (.DEB · v2.0.0 — Sem Navegador)</h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Empacotado com o <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> oficial do Debian + <span className="font-mono text-[#CBD5E1]">md5sums</span> e baixado com validação de assinatura binária (evita corrupção por proxy). Compatível com Zorin Software, Central de Programas, GDebi, PipeWire/PulseAudio e X11/Wayland.
+                    Aplicativo desktop 100% nativo em <span className="font-mono text-[#CBD5E1]">GTK 3</span> (sem navegador, sem WebView e sem Electron), empacotado com <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> + <span className="font-mono text-[#CBD5E1]">md5sums</span> para Zorin OS, Ubuntu, Mint e Debian. Inclui janela nativa com Dispositivos, Trackpad Remoto, Clipboard, Arquivos e controle X11/PipeWire integrados.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    dpkg-deb autêntico · Download binário validado · Menu GNOME/Zorin/KDE · Ponte Python 3 sem pip
+                    GTK 3 nativo · Zero navegador · dpkg-deb autêntico · Download binário validado · Controle X11/PipeWire
                   </p>
                 </div>
                 <button
@@ -839,10 +839,10 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                 <div className="min-w-0">
                   <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#F1F5F9]">
                     <GitBranch className="h-3.5 w-3.5 text-[#60A5FA]" />
-                    Quer o executável Electron compilado (.DEB + .AppImage)?
+                    Compilar executáveis nativos no seu repositório GitHub?
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Use a aba <strong className="font-medium text-[#CBD5E1]">Repositório CI</strong> para baixar o monorepo pronto para GitHub Actions que compila binários nativos independentes de navegador.
+                    O workflow já está pronto na raiz do projeto (<span className="font-mono text-[#CBD5E1]">.github/workflows/build-native-apps.yml</span>) para compilar Linux GTK 3 (.deb), Windows C# .NET 8 (.exe) e Android Kotlin (.apk) automaticamente nas Releases.
                   </p>
                 </div>
                 <button
@@ -966,10 +966,10 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                 <div className="min-w-0">
                   <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#F1F5F9]">
                     <Package className="h-3.5 w-3.5 text-[#60A5FA]" />
-                    Pacote Nativo Android Kotlin (Geração de .APK)
+                    Aplicativo 100% Nativo Android Kotlin (Sem WebView — Geração de .APK)
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Projeto Android completo em Kotlin (<span className="font-mono text-[#CBD5E1]">MainActivity.kt</span>) pronto para compilar o <span className="font-mono text-[#CBD5E1]">.apk</span> no Android Studio ou automaticamente via <strong className="font-medium text-[#CBD5E1]">Repositório CI</strong>.
+                    App nativo real em Kotlin (<span className="font-mono text-[#CBD5E1]">MainActivity.kt</span>) com <span className="font-mono text-[#CBD5E1]">OkHttp WebSocket</span>, Trackpad Multi-Toque nativo, <span className="font-mono text-[#CBD5E1]">ClipboardManager</span> e envio de arquivos — sem WebView. Compilado automaticamente em <strong className="font-medium text-[#CBD5E1]">Repositório CI</strong>.
                   </p>
                 </div>
                 <button
@@ -1032,13 +1032,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
                   <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                    Repositório de Compilação Nativa (GitHub Actions · v1.2.0)
+                    Compilação dos Apps 100% Nativos (GitHub Actions · v2.0.0)
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Monorepo completo já configurado com Electron Desktop (Linux + Windows), Android Kotlin e pipeline automático do GitHub Actions. Ao enviar para o GitHub, os servidores na nuvem compilam e publicam em <strong className="font-medium text-[#CBD5E1]">Releases</strong>:
+                    Apps nativos reais sem WebApp e sem WebView: <strong className="font-medium text-[#CBD5E1]">Linux GTK 3</strong>, <strong className="font-medium text-[#CBD5E1]">Windows C# .NET 8 (WinForms/Win32)</strong> e <strong className="font-medium text-[#CBD5E1]">Android Kotlin + OkHttp</strong>. O workflow já está na raiz do projeto (<span className="font-mono text-[#CBD5E1]">.github/workflows/build-native-apps.yml</span>) e também disponível abaixo em ZIP:
                   </p>
                   <p className="mt-2 font-mono text-[11px] text-[#60A5FA]">
-                    Continuum-Linux-amd64.deb · .AppImage · Windows-Setup.exe · Continuum-Android.apk
+                    Continuum-Linux-amd64.deb · Continuum-Windows.exe · Windows-Setup.exe · Continuum-Android.apk
                   </p>
                 </div>
                 <button
@@ -1223,20 +1223,20 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
             <div className="mt-3 divide-y divide-[#222936] text-xs">
               {[
                 {
-                  os: 'Linux (.DEB instantâneo)',
-                  detail: 'Gerado com dpkg-deb real + md5sums + validação binária no download para Zorin OS, Ubuntu e Mint',
+                  os: 'Linux (GTK 3 Nativo)',
+                  detail: 'App desktop GTK 3 real (.deb v2.0.0 com dpkg-deb + md5sums), sem navegador e com controle X11/PipeWire',
                 },
                 {
-                  os: 'Windows (.ZIP instantâneo)',
-                  detail: 'Instalador gráfico .VBS, ícone .ICO, bandeja com log e controle nativo Win32 sem Node.js',
+                  os: 'Windows (C# .NET 8 Nativo)',
+                  detail: 'Compila Continuum-Windows.exe + Setup.exe via GitHub Actions (WinForms + Win32 P/Invoke, sem WebView)',
                 },
                 {
-                  os: 'Android / iOS (1 toque)',
-                  detail: 'Instalação direta via QR Code com Wake Lock + projeto Kotlin para geração de .APK',
+                  os: 'Android (Kotlin + OkHttp Nativo)',
+                  detail: 'App Android real sem WebView com Trackpad Multi-Toque, ClipboardManager e arquivos (.APK via Actions)',
                 },
                 {
-                  os: 'Repositório CI (Compilado)',
-                  detail: 'Compila binários Electron (.deb, .AppImage, .exe) e Android (.apk) automaticamente no GitHub Actions',
+                  os: 'GitHub Actions na Raiz',
+                  detail: 'Ao sincronizar este projeto no GitHub, os 3 apps nativos compilam automaticamente nas Releases',
                 },
               ].map((row) => (
                 <div key={row.os} className="py-2.5">
