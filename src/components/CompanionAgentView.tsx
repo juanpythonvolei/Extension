@@ -294,11 +294,12 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
     activeKey: null,
     message: '',
   });
+  const DEFAULT_GITHUB_REPO = 'juanpythonvolei/Extension';
   const [githubRepoDraft, setGithubRepoDraft] = useState<string>(() => {
     try {
-      return localStorage.getItem('continuum_github_repo') || '';
+      return localStorage.getItem('continuum_github_repo') || DEFAULT_GITHUB_REPO;
     } catch {
-      return '';
+      return DEFAULT_GITHUB_REPO;
     }
   });
   const [releaseState, setReleaseState] = useState<GitHubReleaseState>({
@@ -335,9 +336,16 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
   })();
 
   const serverQueryParam = isCustomServer ? `&server=${encodeURIComponent(effectiveServer)}` : '';
-  const mobileInstallLink = `${effectiveServer}${window.location.pathname}?room=${encodeURIComponent(
-    roomCode
-  )}&install=${selectedPlatform === 'ios' ? 'ios' : 'android'}`;
+  const releaseWindowsExe = releaseState.assets.find((a) => /^Continuum-Windows\.exe$/i.test(a.name))
+    ?? releaseState.assets.find((a) => /\.exe$/i.test(a.name));
+  const releaseAndroidApk = releaseState.assets.find((a) => /\.apk$/i.test(a.name));
+  const fallbackAndroidApkUrl = `https://github.com/${DEFAULT_GITHUB_REPO}/releases/download/latest-native/Continuum-Android.apk`;
+  const fallbackWindowsExeUrl = `https://github.com/${DEFAULT_GITHUB_REPO}/releases/download/latest-native/Continuum-Windows.exe`;
+
+  const mobileInstallLink =
+    selectedPlatform === 'android'
+      ? releaseAndroidApk?.browser_download_url || fallbackAndroidApkUrl
+      : `${effectiveServer}${window.location.pathname}?room=${encodeURIComponent(roomCode)}&install=ios`;
 
   useEffect(() => {
     try {
@@ -509,6 +517,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
         assets: [],
       });
     }
+  }, []);
+
+  useEffect(() => {
+    if (githubRepoDraft.trim()) {
+      void fetchGitHubReleases(githubRepoDraft);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const runDiagnostics = useCallback(async () => {
@@ -903,17 +918,40 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
             </div>
           )}
 
-          {/* WINDOWS PLUG-AND-PLAY */}
+          {/* WINDOWS 100% NATIVE (.EXE COMPILADO + PACOTE PORTÁTIL WINFORMS) */}
           {selectedPlatform === 'windows' && (
             <div className="mt-5 space-y-5">
-              <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#090B0E] p-5 sm:flex-row sm:items-center">
+              <div className="flex flex-col justify-between gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
-                  <h2 className="text-sm font-semibold text-[#F1F5F9]">Continuum para Windows 10 e 11 · v1.1.1</h2>
+                  <h2 className="text-sm font-semibold text-[#F1F5F9]">
+                    Continuum Windows Nativo (.EXE · v2.0.0 — C# .NET 8, Sem Navegador)
+                  </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Instalador gráfico nativo (.VBS + Ponte .NET integrada) com ícone <span className="font-mono text-[#CBD5E1]">.ICO</span> próprio, cursor absoluto para toque Second Screen e log local (<span className="font-mono text-[#CBD5E1]">bridge.log</span>).
+                    Executável único nativo compilado em <span className="font-mono text-[#CBD5E1]">C# .NET 8 (WinForms + Win32 P/Invoke)</span> direto da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Zero navegador, zero WebView e zero instalação de runtime.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    Menu Iniciar · Atalho com ícone nativo · Bandeja com Log · Sem Node.js ou Python · Desinstalador incluso
+                    Binário PE x64 autônomo{releaseWindowsExe ? ` · ${formatBytes(releaseWindowsExe.size)}` : ''} · Bandeja do Windows · Trackpad &amp; Win32 integrados
+                  </p>
+                </div>
+                <a
+                  href={releaseWindowsExe?.browser_download_url || fallbackWindowsExeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-[#3B82F6] px-5 py-3 text-xs font-medium text-white transition-colors hover:bg-[#2563EB] whitespace-nowrap shrink-0"
+                >
+                  <Download className="h-4 w-4" />
+                  Baixar Continuum-Windows.exe
+                </a>
+              </div>
+
+              <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#0D1015] p-4 sm:flex-row sm:items-center">
+                <div className="min-w-0">
+                  <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#F1F5F9]">
+                    <Package className="h-3.5 w-3.5 text-[#60A5FA]" />
+                    Pacote Instalador Leve Windows (.ZIP — WinForms Nativo + Código C# .NET 8)
+                  </p>
+                  <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
+                    Extraia e dê dois cliques em <span className="font-mono text-[#CBD5E1]">Instalar Continuum.vbs</span> para criar atalhos com ícone próprio e abrir o app nativo já pareado na malha <span className="font-mono text-[#CBD5E1]">{roomCode}</span>.
                   </p>
                 </div>
                 <button
@@ -922,72 +960,54 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                   onClick={() =>
                     downloadVerifiedPackage('windows', windowsUrl, 'Continuum-Windows.zip', 'zip')
                   }
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-[#3B82F6] px-5 py-3 text-xs font-medium text-white transition-colors hover:bg-[#2563EB] disabled:opacity-60 whitespace-nowrap shrink-0"
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-[#2E3748] bg-[#171C24] px-4 py-2.5 text-xs font-medium text-[#F1F5F9] transition-colors hover:border-[#3B82F6] disabled:opacity-60 whitespace-nowrap shrink-0"
                 >
                   {downloadFeedback.activeKey === 'windows' ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#60A5FA]" />
                   ) : (
-                    <Download className="h-4 w-4" />
+                    <Download className="h-3.5 w-3.5 text-[#60A5FA]" />
                   )}
-                  Baixar para Windows (.ZIP)
+                  Baixar Pacote Leve (.ZIP)
                 </button>
-              </div>
-
-              <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-                {[
-                  {
-                    step: '01. Extraia o pacote',
-                    desc: 'Clique com o botão direito em Continuum-Windows.zip e selecione Extrair Tudo.',
-                  },
-                  {
-                    step: '02. Dois cliques no instalador',
-                    desc: 'Abra "Instalar Continuum.vbs". Ele registra atalhos com ícone nativo sem abrir terminal.',
-                  },
-                  {
-                    step: '03. Plug & Play na malha',
-                    desc: `A janela dedicada abre acoplada à ponte Win32 na malha ${roomCode} (sem duplicar o PC no mapa).`,
-                  },
-                ].map((item) => (
-                  <div key={item.step} className="rounded-md border border-[#222936] bg-[#0D1015] p-4">
-                    <p className="text-xs font-semibold text-[#F1F5F9]">{item.step}</p>
-                    <p className="mt-1.5 text-xs leading-relaxed text-[#94A3B8]">{item.desc}</p>
-                  </div>
-                ))}
               </div>
             </div>
           )}
 
-          {/* ANDROID PLUG-AND-PLAY + NATIVE KOTLIN APK PROJECT */}
+          {/* ANDROID 100% NATIVE KOTLIN APK (SEM WEBVIEW) */}
           {selectedPlatform === 'android' && (
             <div className="mt-5 space-y-5">
-              <div className="grid grid-cols-1 gap-4 rounded-md border border-[#222936] bg-[#090B0E] p-5 sm:grid-cols-[1fr_176px]">
+              <div className="grid grid-cols-1 gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:grid-cols-[1fr_176px]">
                 <div className="flex flex-col justify-between gap-4">
                   <div>
-                    <h2 className="text-sm font-semibold text-[#F1F5F9]">Instalação Direta no Android (1 Toque)</h2>
+                    <h2 className="text-sm font-semibold text-[#F1F5F9]">
+                      Continuum Android Nativo (.APK · v2.0.0 — Kotlin, Sem WebView)
+                    </h2>
                     <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                      Instale o Continuum diretamente na gaveta de aplicativos do Android como um WebAPK nativo em tela cheia, com tela sempre ativa (Wake Lock) durante o Second Screen — zero terminal e zero configuração.
+                      Aplicativo nativo compilado em <span className="font-mono text-[#CBD5E1]">Kotlin + OkHttp WebSocket + Trackpad Multi-Toque</span> direto da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Aponte a câmera do celular para o QR Code ou clique abaixo para baixar o <span className="font-mono text-[#CBD5E1]">Continuum-Android.apk</span>.
+                    </p>
+                    <p className="mt-2 text-[11px] text-[#64748B]">
+                      APK nativo real{releaseAndroidApk ? ` · ${formatBytes(releaseAndroidApk.size)}` : ''} · Zero WebView · Trackpad Multi-Toque · ClipboardManager · Arquivos
                     </p>
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2.5">
-                    {isInstalled && detectedOs === 'android' ? (
-                      <span className="inline-flex items-center gap-1.5 text-xs font-medium text-[#16A34A]">
-                        <CheckCircle2 className="h-4 w-4" />
-                        Aplicativo já instalado neste Android
-                      </span>
-                    ) : isInstallable ? (
+                    <a
+                      href={releaseAndroidApk?.browser_download_url || fallbackAndroidApkUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-2 rounded-md bg-[#3B82F6] px-5 py-2.5 text-xs font-medium text-white transition-colors hover:bg-[#2563EB]"
+                    >
+                      <Download className="h-4 w-4" />
+                      Baixar Continuum-Android.apk
+                    </a>
+                    {isInstallable && !isInstalled && (
                       <button
                         type="button"
                         onClick={install}
-                        className="inline-flex items-center gap-2 rounded-md bg-[#3B82F6] px-4 py-2.5 text-xs font-medium text-white transition-colors hover:bg-[#2563EB]"
+                        className="inline-flex items-center gap-1.5 rounded-md border border-[#2E3748] bg-[#171C24] px-3.5 py-2.5 text-xs font-medium text-[#CBD5E1] transition-colors hover:border-[#3B82F6] hover:text-[#F1F5F9]"
                       >
-                        <Download className="h-4 w-4" />
-                        Instalar App Android Agora
+                        Atalho Rápido
                       </button>
-                    ) : (
-                      <p className="text-xs text-[#60A5FA]">
-                        Aponte a câmera do seu celular ou tablet Android para o QR Code ao lado e toque em Instalar App.
-                      </p>
                     )}
                   </div>
                 </div>
@@ -996,7 +1016,7 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                   {mobileQrUrl ? (
                     <img
                       src={mobileQrUrl}
-                      alt="QR Code de instalação direta no Android"
+                      alt="QR Code para baixar Continuum-Android.apk"
                       className="h-36 w-36 rounded-xs"
                       referrerPolicy="no-referrer"
                     />
@@ -1005,7 +1025,7 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                       Gerando QR...
                     </div>
                   )}
-                  <span className="mt-1.5 font-mono text-[10px] text-[#94A3B8]">Malha {roomCode}</span>
+                  <span className="mt-1.5 font-mono text-[10px] text-[#94A3B8]">Baixar .APK</span>
                 </div>
               </div>
 
@@ -1013,10 +1033,10 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                 <div className="min-w-0">
                   <p className="inline-flex items-center gap-1.5 text-xs font-semibold text-[#F1F5F9]">
                     <Package className="h-3.5 w-3.5 text-[#60A5FA]" />
-                    Aplicativo 100% Nativo Android Kotlin (Sem WebView — Geração de .APK)
+                    Código-Fonte Android Kotlin (.ZIP — Android Studio / Gradle)
                   </p>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    App nativo real em Kotlin (<span className="font-mono text-[#CBD5E1]">MainActivity.kt</span>) com <span className="font-mono text-[#CBD5E1]">OkHttp WebSocket</span>, Trackpad Multi-Toque nativo, <span className="font-mono text-[#CBD5E1]">ClipboardManager</span> e envio de arquivos — sem WebView. Compilado automaticamente em <strong className="font-medium text-[#CBD5E1]">Repositório CI</strong>.
+                    Projeto completo (<span className="font-mono text-[#CBD5E1]">MainActivity.kt</span> + Gradle 8.7) já pré-configurado com a malha <span className="font-mono text-[#CBD5E1]">{roomCode}</span> caso queira compilar localmente.
                   </p>
                 </div>
                 <button
