@@ -20,7 +20,7 @@ permissions:
 
 jobs:
   build-linux:
-    name: Linux Native GTK3 (.deb + .tar.gz)
+    name: Linux Native GTK3 (.AppImage + .deb + .tar.gz)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,12 +47,14 @@ jobs:
           PY
           python3 -m py_compile continuum_app.py
 
-      - name: Build native Linux .deb and portable archive
+      - name: Build native Linux .deb, .AppImage and portable archive
         working-directory: native-apps/linux
         run: |
-          chmod +x build-deb.sh continuum_app.py
+          chmod +x build-deb.sh build-appimage.sh continuum_app.py
           ./build-deb.sh
+          ./build-appimage.sh
           dpkg-deb --info dist/Continuum-Linux-amd64.deb
+          file dist/Continuum-Linux-x86_64.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -172,8 +174,9 @@ jobs:
           body: |
             ## Aplicativos 100% Nativos Compilados — Continuum (Sem WebApp / Sem WebView)
 
-            - **Linux (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** `Continuum-Linux-amd64.deb`
-            - **Linux Portátil (Fedora, Arch, Manjaro — GTK 3):** `Continuum-Linux-Portable.tar.gz`
+            - **Linux AppImage Universal (Zorin OS, Ubuntu, Fedora, Arch — GTK 3):** `Continuum-Linux-x86_64.AppImage`
+            - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** `Continuum-Linux-amd64.deb`
+            - **Linux Portátil (GTK 3):** `Continuum-Linux-Portable.tar.gz`
             - **Windows 10/11 (Instalador NSIS — C# .NET 8):** `Continuum-Windows-Setup.exe`
             - **Windows 10/11 (Executável Único — C# .NET 8):** `Continuum-Windows.exe`
             - **Android (Kotlin + OkHttp + Trackpad Nativo):** `Continuum-Android.apk`

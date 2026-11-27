@@ -3,6 +3,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildZipBuffer, type ZipEntryInput } from './zipBuilder.ts';
 import { buildDebPackage, type TarEntry } from './debBuilder.ts';
+import { buildAppImageBinary, type AppDirEntry } from './appimageBuilder.ts';
 import {
   buildAndroidNativeProjectEntries,
   buildLinuxNativeAppPy,
@@ -1279,6 +1280,73 @@ exit 0
   ];
 
   return buildDebPackage(controlEntries, dataEntries);
+}
+
+/**
+ * LINUX NATIVE `.AppImage` EXECUTABLE (x86_64, Zero-FUSE, Universal: Zorin OS, Ubuntu, Fedora, Arch, Mint)
+ * Self-contained ELF binary with Continuum.AppDir + GTK 3 native application.
+ */
+export function buildLinuxAppImage(ctx: InstallerContext): Buffer {
+  const room = safeStr(ctx.roomCode);
+  const nativeAppPy = buildLinuxNativeAppPy(ctx);
+
+  const appRun = `#!/usr/bin/env bash
+set -e
+HERE="$(dirname "$(readlink -f "$0")")"
+export APPDIR="\${APPDIR:-$HERE}"
+exec python3 "$HERE/usr/share/continuum/continuum_app.py" "$@"
+`;
+
+  const desktopEntry = `[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Continuum
+GenericName=Native Device Mesh
+Comment=Aplicativo Nativo Linux GTK 3 para Malha de Dispositivos (Malha ${room})
+Exec=continuum
+Icon=continuum
+Terminal=false
+Categories=Network;Utility;System;
+StartupWMClass=continuum_app.py
+X-AppImage-Version=2.0.0
+`;
+
+  const appdataXml = `<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.continuum.mesh</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Continuum</name>
+  <summary>Aplicativo nativo GTK 3 para malha de dispositivos, trackpad remoto e clipboard universal</summary>
+  <description>
+    <p>Continuum conecta dispositivos Linux, Windows e Android em tempo real com aplicativo desktop nativo GTK 3, sem navegador e sem WebView.</p>
+  </description>
+  <launchable type="desktop-id">continuum.desktop</launchable>
+</component>
+`;
+
+  const entries: AppDirEntry[] = [
+    { path: 'AppRun', content: appRun, mode: 0o755 },
+    { path: 'continuum.desktop', content: desktopEntry, mode: 0o644 },
+    { path: 'usr/bin/continuum', content: appRun, mode: 0o755 },
+    { path: 'usr/share/continuum/continuum_app.py', content: nativeAppPy, mode: 0o755 },
+    { path: 'usr/share/applications/continuum.desktop', content: desktopEntry, mode: 0o644 },
+    { path: 'usr/share/metainfo/app.continuum.mesh.appdata.xml', content: appdataXml, mode: 0o644 },
+  ];
+
+  const png512 = readPublicAsset('pwa-512x512.png') ?? readPublicAsset('pwa-192x192.png');
+  if (png512) {
+    entries.push({ path: 'continuum.png', content: png512, mode: 0o644 });
+    entries.push({ path: '.DirIcon', content: png512, mode: 0o644 });
+    entries.push({ path: 'usr/share/icons/hicolor/512x512/apps/continuum.png', content: png512, mode: 0o644 });
+  }
+
+  const svg = readPublicAsset('icon.svg');
+  if (svg) {
+    entries.push({ path: 'usr/share/icons/hicolor/scalable/apps/continuum.svg', content: svg, mode: 0o644 });
+  }
+
+  return buildAppImageBinary(entries);
 }
 
 /**

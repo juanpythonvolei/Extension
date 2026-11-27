@@ -109,10 +109,92 @@ ls -lh "$OUT_DIR"
 `;
 }
 
+function buildLinuxAppImageScript(room: string): string {
+  return `#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+OUT_DIR="$SCRIPT_DIR/dist"
+APPDIR="$SCRIPT_DIR/.Continuum.AppDir"
+mkdir -p "$OUT_DIR"
+rm -rf "$APPDIR"
+mkdir -p "$APPDIR/usr/bin" "$APPDIR/usr/share/continuum" "$APPDIR/usr/share/applications" "$APPDIR/usr/share/icons/hicolor/512x512/apps" "$APPDIR/usr/share/icons/hicolor/scalable/apps" "$APPDIR/usr/share/metainfo"
+
+cp "$SCRIPT_DIR/continuum_app.py" "$APPDIR/usr/share/continuum/continuum_app.py"
+chmod 755 "$APPDIR/usr/share/continuum/continuum_app.py"
+
+cat > "$APPDIR/AppRun" <<'EOF'
+#!/usr/bin/env bash
+set -e
+HERE="$(dirname "$(readlink -f "$0")")"
+export APPDIR="\${APPDIR:-$HERE}"
+exec python3 "$HERE/usr/share/continuum/continuum_app.py" "$@"
+EOF
+chmod 755 "$APPDIR/AppRun"
+cp "$APPDIR/AppRun" "$APPDIR/usr/bin/continuum"
+
+cat > "$APPDIR/continuum.desktop" <<EOF
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Continuum
+GenericName=Native Device Mesh
+Comment=Aplicativo Nativo Linux GTK 3 para Malha de Dispositivos (Malha ${room})
+Exec=continuum
+Icon=continuum
+Terminal=false
+Categories=Network;Utility;System;
+StartupWMClass=continuum_app.py
+X-AppImage-Version=2.0.0
+EOF
+chmod 644 "$APPDIR/continuum.desktop"
+cp "$APPDIR/continuum.desktop" "$APPDIR/usr/share/applications/continuum.desktop"
+
+cat > "$APPDIR/usr/share/metainfo/app.continuum.mesh.appdata.xml" <<'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>app.continuum.mesh</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <name>Continuum</name>
+  <summary>Aplicativo nativo GTK 3 para malha de dispositivos, trackpad remoto e clipboard universal</summary>
+  <description>
+    <p>Continuum conecta dispositivos Linux, Windows e Android em tempo real com aplicativo desktop nativo GTK 3, sem navegador e sem WebView.</p>
+  </description>
+  <launchable type="desktop-id">continuum.desktop</launchable>
+</component>
+EOF
+
+if [ -f "$SCRIPT_DIR/assets/continuum.png" ]; then
+  cp "$SCRIPT_DIR/assets/continuum.png" "$APPDIR/continuum.png"
+  cp "$SCRIPT_DIR/assets/continuum.png" "$APPDIR/.DirIcon"
+  cp "$SCRIPT_DIR/assets/continuum.png" "$APPDIR/usr/share/icons/hicolor/512x512/apps/continuum.png"
+fi
+if [ -f "$SCRIPT_DIR/assets/continuum.svg" ]; then
+  cp "$SCRIPT_DIR/assets/continuum.svg" "$APPDIR/usr/share/icons/hicolor/scalable/apps/continuum.svg"
+fi
+
+APPIMAGETOOL="\${APPIMAGETOOL:-appimagetool}"
+if ! command -v "$APPIMAGETOOL" >/dev/null 2>&1 && [ ! -x "$APPIMAGETOOL" ]; then
+  APPIMAGETOOL="$SCRIPT_DIR/.appimagetool-x86_64.AppImage"
+  if [ ! -x "$APPIMAGETOOL" ]; then
+    echo "Baixando appimagetool-x86_64.AppImage..."
+    curl -fsSL -o "$APPIMAGETOOL" "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage"
+    chmod +x "$APPIMAGETOOL"
+  fi
+fi
+
+ARCH=x86_64 "$APPIMAGETOOL" --appimage-extract-and-run --no-appstream "$APPDIR" "$OUT_DIR/Continuum-Linux-x86_64.AppImage"
+chmod +x "$OUT_DIR/Continuum-Linux-x86_64.AppImage"
+rm -rf "$APPDIR"
+ls -lh "$OUT_DIR/Continuum-Linux-x86_64.AppImage"
+`;
+}
+
 /**
  * Generates all files for the 100% True Native Apps Compilation Repository
  * (ZERO WebView, ZERO Electron, ZERO Browser Wrappers):
- *  - native-apps/linux/   -> Native GTK 3 Linux App (.deb + .tar.gz)
+ *  - native-apps/linux/   -> Native GTK 3 Linux App (.AppImage + .deb + .tar.gz)
  *  - native-apps/windows/ -> Native C# .NET 8 WinForms/Win32 App (Continuum-Windows.exe + Setup.exe)
  *  - native-apps/android/ -> Native Kotlin + OkHttp + Multi-Touch Trackpad App (Continuum-Android.apk)
  *  - .github/workflows/build-native-apps.yml -> Automated multi-OS GitHub Actions + Releases
@@ -127,7 +209,7 @@ Este repositório compila **aplicativos nativos reais** para cada sistema operac
 
 | Plataforma | Tecnologia Nativa Real | Artefatos Compilados (Releases) |
 | --- | --- | --- |
-| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 nativo** + Python 3 stdlib + X11/PipeWire | \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
+| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 nativo** + Python 3 stdlib + X11/PipeWire | \`Continuum-Linux-x86_64.AppImage\` + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
 | **Windows 10 / 11** | **C# .NET 8 WinForms + Win32 P/Invoke** | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
 | **Android (Celular e Tablet)** | **Kotlin nativo + Material + OkHttp WebSocket + Trackpad Multi-Toque** | \`Continuum-Android.apk\` |
 
@@ -163,7 +245,7 @@ permissions:
 
 jobs:
   build-linux:
-    name: Linux Native GTK3 (.deb + .tar.gz)
+    name: Linux Native GTK3 (.AppImage + .deb + .tar.gz)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -190,12 +272,14 @@ jobs:
           PY
           python3 -m py_compile continuum_app.py
 
-      - name: Build native Linux .deb and portable archive
+      - name: Build native Linux .deb, .AppImage and portable archive
         working-directory: native-apps/linux
         run: |
-          chmod +x build-deb.sh continuum_app.py
+          chmod +x build-deb.sh build-appimage.sh continuum_app.py
           ./build-deb.sh
+          ./build-appimage.sh
           dpkg-deb --info dist/Continuum-Linux-amd64.deb
+          file dist/Continuum-Linux-x86_64.AppImage
 
       - uses: actions/upload-artifact@v4
         with:
@@ -315,8 +399,9 @@ jobs:
           body: |
             ## Aplicativos 100% Nativos Compilados — Continuum (Sem WebApp / Sem WebView)
 
-            - **Linux (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** \`Continuum-Linux-amd64.deb\`
-            - **Linux Portátil (Fedora, Arch, Manjaro — GTK 3):** \`Continuum-Linux-Portable.tar.gz\`
+            - **Linux AppImage Universal (Zorin OS, Ubuntu, Fedora, Arch — GTK 3):** \`Continuum-Linux-x86_64.AppImage\`
+            - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** \`Continuum-Linux-amd64.deb\`
+            - **Linux Portátil (GTK 3):** \`Continuum-Linux-Portable.tar.gz\`
             - **Windows 10/11 (Instalador NSIS — C# .NET 8):** \`Continuum-Windows-Setup.exe\`
             - **Windows 10/11 (Executável Único — C# .NET 8):** \`Continuum-Windows.exe\`
             - **Android (Kotlin + OkHttp + Trackpad Nativo):** \`Continuum-Android.apk\`
@@ -330,9 +415,10 @@ jobs:
   const entries: ZipEntryInput[] = [
     { name: 'README.md', content: readmeMd },
     { name: '.github/workflows/build-native-apps.yml', content: workflowYml },
-    // Linux 100% Native GTK 3 App
+    // Linux 100% Native GTK 3 App (.AppImage + .deb + .tar.gz)
     { name: 'native-apps/linux/continuum_app.py', content: buildLinuxNativeAppPy(ctx), executable: true },
     { name: 'native-apps/linux/build-deb.sh', content: buildLinuxDebScript(room, serverUrl), executable: true },
+    { name: 'native-apps/linux/build-appimage.sh', content: buildLinuxAppImageScript(room), executable: true },
     // Windows 100% Native C# .NET 8 WinForms + Win32 App
     { name: 'native-apps/windows/Continuum.Windows.csproj', content: buildWindowsNativeCsproj() },
     { name: 'native-apps/windows/Program.cs', content: buildWindowsNativeProgramCs(ctx) },

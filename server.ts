@@ -14,6 +14,7 @@ import type {
 } from './src/types/mesh.ts';
 import {
   buildAndroidNativeZip,
+  buildLinuxAppImage,
   buildLinuxDebPackage,
   buildLinuxInstallerZip,
   buildWindowsInstallerZip,
@@ -464,6 +465,14 @@ async function bootstrap() {
       return;
     }
 
+    if (platform === 'linux-appimage') {
+      const appImage = buildLinuxAppImage(ctx);
+      res.setHeader('Content-Type', 'application/vnd.appimage');
+      res.setHeader('Content-Disposition', 'attachment; filename="Continuum-Linux-x86_64.AppImage"');
+      res.send(appImage);
+      return;
+    }
+
     if (platform === 'linux-deb') {
       const deb = buildLinuxDebPackage(ctx);
       res.setHeader('Content-Type', 'application/vnd.debian.binary-package');
@@ -496,7 +505,7 @@ async function bootstrap() {
       return;
     }
 
-    res.status(400).json({ error: 'Plataforma inválida. Use windows, linux-deb, linux, android ou native-repo.' });
+    res.status(400).json({ error: 'Plataforma inválida. Use windows, linux-appimage, linux-deb, linux, android ou native-repo.' });
   });
 
   const server = http.createServer(app);

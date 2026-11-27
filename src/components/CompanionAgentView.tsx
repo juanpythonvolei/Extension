@@ -163,12 +163,17 @@ function formatAgo(ts: number | null | undefined): string {
   return `há ${mins}m`;
 }
 
-function hasValidMagicBytes(bytes: Uint8Array, expectedKind: 'deb' | 'zip'): boolean {
+function hasValidMagicBytes(bytes: Uint8Array, expectedKind: 'deb' | 'zip' | 'appimage'): boolean {
   if (expectedKind === 'deb') {
     // Standard Debian ar archive magic: "!<arch>\n"
     const sig = [0x21, 0x3c, 0x61, 0x72, 0x63, 0x68, 0x3e, 0x0a];
     if (bytes.length < sig.length) return false;
     return sig.every((b, idx) => bytes[idx] === b);
+  }
+  if (expectedKind === 'appimage') {
+    // Standard Linux ELF executable magic: "\x7fELF"
+    if (bytes.length < 4) return false;
+    return bytes[0] === 0x7f && bytes[1] === 0x45 && bytes[2] === 0x4c && bytes[3] === 0x46;
   }
   // Standard ZIP local file header: "PK\x03\x04"
   if (bytes.length < 4) return false;
@@ -371,7 +376,7 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
    * as a corrupted .deb or .zip file.
    */
   const downloadVerifiedPackage = useCallback(
-    async (key: string, url: string, fileName: string, expectedKind: 'deb' | 'zip') => {
+    async (key: string, url: string, fileName: string, expectedKind: 'deb' | 'zip' | 'appimage') => {
       setDownloadFeedback({
         state: 'downloading',
         activeKey: key,
@@ -401,12 +406,18 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
           throw new Error(
             expectedKind === 'deb'
               ? 'Assinatura binária inválida: o arquivo recebido não é um pacote Debian (.deb) íntegro.'
-              : 'Assinatura binária inválida: o arquivo recebido não é um pacote .ZIP íntegro.'
+              : expectedKind === 'appimage'
+                ? 'Assinatura binária inválida: o arquivo recebido não é um executável Linux ELF (.AppImage) íntegro.'
+                : 'Assinatura binária inválida: o arquivo recebido não é um pacote .ZIP íntegro.'
           );
         }
 
         const mimeType =
-          expectedKind === 'deb' ? 'application/vnd.debian.binary-package' : 'application/zip';
+          expectedKind === 'deb'
+            ? 'application/vnd.debian.binary-package'
+            : expectedKind === 'appimage'
+              ? 'application/vnd.appimage'
+              : 'application/zip';
         const blob = new Blob([buffer], { type: mimeType });
         const objectUrl = URL.createObjectURL(blob);
         const anchor = document.createElement('a');
@@ -417,12 +428,16 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
         anchor.remove();
         window.setTimeout(() => URL.revokeObjectURL(objectUrl), 15000);
 
+        const sigLabel =
+          expectedKind === 'deb'
+            ? 'Debian ar'
+            : expectedKind === 'appimage'
+              ? 'ELF x86_64 AppImage'
+              : 'ZIP PK';
         setDownloadFeedback({
           state: 'ok',
           activeKey: null,
-          message: `${fileName} validado (${formatBytes(bytes.length)}, assinatura ${
-            expectedKind === 'deb' ? 'Debian ar' : 'ZIP PK'
-          } íntegra) e salvo com sucesso.`,
+          message: `${fileName} validado (${formatBytes(bytes.length)}, assinatura ${sigLabel} íntegra) e salvo com sucesso.`,
         });
       } catch (err) {
         const msg = err instanceof Error ? err.message : 'Falha desconhecida ao baixar o pacote.';
@@ -632,6 +647,7 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
   ];
 
   const windowsUrl = `/api/download-app/windows?room=${encodeURIComponent(roomCode)}${serverQueryParam}`;
+  const linuxAppImageUrl = `/api/download-app/linux-appimage?room=${encodeURIComponent(roomCode)}${serverQueryParam}`;
   const linuxDebUrl = `/api/download-app/linux-deb?room=${encodeURIComponent(roomCode)}${serverQueryParam}`;
   const linuxUrl = `/api/download-app/linux?room=${encodeURIComponent(roomCode)}${serverQueryParam}`;
   const androidNativeUrl = `/api/download-app/android?room=${encodeURIComponent(roomCode)}${serverQueryParam}`;
@@ -782,17 +798,48 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
             })}
           </div>
 
-          {/* LINUX PLUG-AND-PLAY (.DEB NATIVO COM DPKG-DEB + UNIVERSAL .ZIP) */}
+          {/* LINUX PLUG-AND-PLAY (.AppImage UNIVERSAL ZERO-FUSE + .DEB NATIVO + .ZIP) */}
           {selectedPlatform === 'linux' && (
             <div className="mt-5 space-y-5">
-              <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#090B0E] p-5 sm:flex-row sm:items-center">
+              <div className="flex flex-col justify-between gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
-                  <h2 className="text-sm font-semibold text-[#F1F5F9]">Aplicativo Nativo Linux GTK 3 (.DEB · v2.0.0 — Sem Navegador)</h2>
+                  <h2 className="text-sm font-semibold text-[#F1F5F9]">
+                    Continuum Linux AppImage (.AppImage · v2.0.0 — Plug-and-Play Universal)
+                  </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Aplicativo desktop 100% nativo em <span className="font-mono text-[#CBD5E1]">GTK 3</span> (sem navegador, sem WebView e sem Electron), empacotado com <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> + <span className="font-mono text-[#CBD5E1]">md5sums</span> para Zorin OS, Ubuntu, Mint e Debian. Inclui janela nativa com Dispositivos, Trackpad Remoto, Clipboard, Arquivos e controle X11/PipeWire integrados.
+                    Executável único nativo <span className="font-mono text-[#CBD5E1]">ELF x86_64</span> com interface desktop <span className="font-mono text-[#CBD5E1]">GTK 3</span> (sem navegador e sem WebView). Roda direto no Zorin OS, Ubuntu, Mint, Pop!_OS, Fedora e Arch sem precisar de Loja de Apps nem <span className="font-mono text-[#CBD5E1]">libfuse2</span>: basta marcar <strong className="font-medium text-[#CBD5E1]">Permitir executar como programa</strong> nas Propriedades e abrir com dois cliques.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    GTK 3 nativo · Zero navegador · dpkg-deb autêntico · Download binário validado · Controle X11/PipeWire
+                    Binário ELF x86_64 · Zero FUSE · Sem instalação · GTK 3 nativo · Controle X11/PipeWire integrado
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={downloadFeedback.state === 'downloading'}
+                  onClick={() =>
+                    downloadVerifiedPackage(
+                      'linux-appimage',
+                      linuxAppImageUrl,
+                      'Continuum-Linux-x86_64.AppImage',
+                      'appimage'
+                    )
+                  }
+                  className="inline-flex items-center justify-center gap-2 rounded-md bg-[#3B82F6] px-5 py-3 text-xs font-medium text-white transition-colors hover:bg-[#2563EB] disabled:opacity-60 whitespace-nowrap shrink-0"
+                >
+                  {downloadFeedback.activeKey === 'linux-appimage' ? (
+                    <RefreshCw className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Download className="h-4 w-4" />
+                  )}
+                  Baixar AppImage (.AppImage)
+                </button>
+              </div>
+
+              <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#0D1015] p-4 sm:flex-row sm:items-center">
+                <div>
+                  <h2 className="text-xs font-semibold text-[#F1F5F9]">Instalador Debian/Ubuntu (.DEB · v2.0.0 — GTK 3 Nativo)</h2>
+                  <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
+                    Pacote <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> autêntico com <span className="font-mono text-[#CBD5E1]">md5sums</span> para instalação no sistema (Zorin OS, Ubuntu, Mint, Pop!_OS e Debian), registrando atalho e ícone nativos no menu.
                   </p>
                 </div>
                 <button
@@ -801,12 +848,12 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                   onClick={() =>
                     downloadVerifiedPackage('linux-deb', linuxDebUrl, 'Continuum-Linux.deb', 'deb')
                   }
-                  className="inline-flex items-center justify-center gap-2 rounded-md bg-[#3B82F6] px-5 py-3 text-xs font-medium text-white transition-colors hover:bg-[#2563EB] disabled:opacity-60 whitespace-nowrap shrink-0"
+                  className="inline-flex items-center justify-center gap-2 rounded-md border border-[#2E3748] bg-[#171C24] px-4 py-2.5 text-xs font-medium text-[#F1F5F9] transition-colors hover:border-[#3B82F6] disabled:opacity-60 whitespace-nowrap shrink-0"
                 >
                   {downloadFeedback.activeKey === 'linux-deb' ? (
-                    <RefreshCw className="h-4 w-4 animate-spin" />
+                    <RefreshCw className="h-3.5 w-3.5 animate-spin text-[#60A5FA]" />
                   ) : (
-                    <Download className="h-4 w-4" />
+                    <Download className="h-3.5 w-3.5 text-[#60A5FA]" />
                   )}
                   Baixar Instalador (.DEB)
                 </button>
@@ -1038,7 +1085,7 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                     Apps nativos reais sem WebApp e sem WebView: <strong className="font-medium text-[#CBD5E1]">Linux GTK 3</strong>, <strong className="font-medium text-[#CBD5E1]">Windows C# .NET 8 (WinForms/Win32)</strong> e <strong className="font-medium text-[#CBD5E1]">Android Kotlin + OkHttp</strong>. O workflow já está na raiz do projeto (<span className="font-mono text-[#CBD5E1]">.github/workflows/build-native-apps.yml</span>) e também disponível abaixo em ZIP:
                   </p>
                   <p className="mt-2 font-mono text-[11px] text-[#60A5FA]">
-                    Continuum-Linux-amd64.deb · Continuum-Windows.exe · Windows-Setup.exe · Continuum-Android.apk
+                    Continuum-Linux-x86_64.AppImage · Continuum-Linux-amd64.deb · Continuum-Windows.exe · Continuum-Android.apk
                   </p>
                 </div>
                 <button
@@ -1224,7 +1271,7 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
               {[
                 {
                   os: 'Linux (GTK 3 Nativo)',
-                  detail: 'App desktop GTK 3 real (.deb v2.0.0 com dpkg-deb + md5sums), sem navegador e com controle X11/PipeWire',
+                  detail: 'AppImage universal x86_64 (Zero-FUSE) + .deb v2.0.0 com interface GTK 3 real e controle X11/PipeWire',
                 },
                 {
                   os: 'Windows (C# .NET 8 Nativo)',
