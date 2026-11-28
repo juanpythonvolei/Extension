@@ -1,27 +1,31 @@
-import type { InstallerContext } from './platformInstallers.ts';
 import type { ZipEntryInput } from './zipBuilder.ts';
+import type { InstallerContext } from './platformInstallers.ts';
 
 function safeStr(val: string): string {
   return val.replace(/[`'"\\$<>|;&\r\n]/g, '');
 }
 
 /**
- * 100% NATIVE ANDROID KOTLIN APPLICATION v4.0.0 (HOLOGRAPHIC SPATIAL UI + ULTRA-FLUID AUTO LAN MESH)
- * - ZERO WebView, ZERO Browser, ZERO Web App dependency!
- * - 3-Layer Automatic LAN Discovery:
- *     1) Active UDP Probe (255.255.255.255 + /24 subnet broadcast + multicast 239.255.45.90) with Unicast reply
- *     2) Fast Parallel /24 TCP LAN Scanner (32 threads, GET /continuum-info on 45891) — bypasses router UDP blocks!
- *     3) Embedded Android RFC-6455 LAN WebSocket Hub (TCP 45891) — lets PCs connect outbound if PC firewall blocks!
- * - Smart URL Normalization: accepts http://ip:port, ws://ip:port, ip:port, ip, or .42 (auto-completes Wi-Fi subnet).
- * - Holographic 60fps Custom Canvas UI:
- *     - Sweeping cyan radar beam, pulsing telemetry rings, animated data packets along glowing Bezier links
- *     - Frosted holographic glass device cards with iridescent cyan->blue->violet borders & radial CPU/RAM arc gauges
- *     - Tactile holographic trackpad with HUD corner brackets, luminous comet trail, multi-ring shockwaves & haptics
+ * 100% NATIVE ANDROID APPLICATION v5.0.0 — RESPONSIVE TABLET & PHONE HOLOGRAPHIC SUITE
+ * - Pure Kotlin + Custom 60 FPS Canvas + Live Second Screen (JPEG over LAN WebSocket) + OkHttp (ZERO WebView)
+ * - ZERO Reconnect Loops:
+ *     * Monotonic `connGen` generation guard (stale sockets NEVER mutate state or trigger reconnects)
+ *     * Pre-connect TCP `/continuum-info` probe before switching hubs (never switches into a firewalled IP)
+ *     * Peer-aware hub lock (never abandons a hub that already has a connected peer!)
+ *     * Bidirectional firewall fallback: if PC port 45891 is blocked, Android stays cleanly on its embedded Hub
+ *       so PC connects outbound to Android without any infinite reconnect cycle!
+ * - Full Web-App Parity (5 Spacious Workspaces):
+ *     1. Mapa Espacial (60fps Holographic Radar + Flowing Data Beams + Drag & Drop + Radial CPU/RAM Gauges)
+ *     2. Segunda Tela (Live Extended/Mirrored PC Monitor View + Direct Touch-to-PC-Cursor + Fullscreen Mode)
+ *     3. Mouse & Teclado (Spacious Holographic Multi-Touch Trackpad + Mouse Buttons + Live Keyboard + Shortcuts + Media)
+ *     4. Clipboard & Arquivos (Real Auto-Sync OS Clipboard + History + Direct LAN File Transfer)
+ *     5. Rede & Sistema (Live Telemetry Cards + 3-Layer Wi-Fi Radar + 1-Tap Connect + Direct IP + Alerts)
+ * - Responsive Layout: Left Sidebar (220dp) on Android Tablets/Landscape, Spacious 5-Tab Dock on Phones.
  */
 export function buildAndroidNativeProjectEntries(
   ctx: InstallerContext,
   pngIcon: Buffer | null,
-  prefix = 'native-apps/android'
+  prefix = 'continuum-android-native'
 ): ZipEntryInput[] {
   const room = safeStr(ctx.roomCode || 'MESH01');
 
@@ -70,10 +74,10 @@ android {
         applicationId = "app.continuum.nativeclient"
         minSdk = 26
         targetSdk = 34
-        versionCode = 4
-        versionName = "4.0.0"
+        versionCode = 5
+        versionName = "5.0.0"
 
-        buildConfigField("String", "DEFAULT_ROOM_CODE", "\\"$defaultRoomCode\\"")
+        buildConfigField("String", "DEFAULT_ROOM_CODE", "\\"\$defaultRoomCode\\"")
     }
 
     buildFeatures {
@@ -133,7 +137,7 @@ dependencies {
         <activity
             android:name=".MainActivity"
             android:exported="true"
-            android:configChanges="orientation|screenSize|keyboardHidden"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden"
             android:windowSoftInputMode="adjustResize">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
@@ -151,8 +155,8 @@ dependencies {
         <item name="colorPrimaryVariant">#3B82F6</item>
         <item name="colorOnPrimary">#050810</item>
         <item name="colorSecondary">#8B5CF6</item>
-        <item name="android:windowBackground">#050810</item>
-        <item name="android:statusBarColor">#050810</item>
+        <item name="android:windowBackground">#060A13</item>
+        <item name="android:statusBarColor">#080D18</item>
         <item name="android:navigationBarColor">#080D18</item>
     </style>
 </resources>
@@ -165,12 +169,15 @@ import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Color
 import android.graphics.LinearGradient
 import android.graphics.Paint
 import android.graphics.Path
 import android.graphics.RadialGradient
+import android.graphics.Rect
 import android.graphics.RectF
 import android.graphics.Shader
 import android.graphics.SweepGradient
@@ -187,6 +194,7 @@ import android.os.Looper
 import android.os.SystemClock
 import android.provider.OpenableColumns
 import android.text.InputType
+import android.text.TextUtils
 import android.util.Base64
 import android.util.TypedValue
 import android.view.Gravity
@@ -201,6 +209,7 @@ import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
+import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
@@ -231,31 +240,35 @@ import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.abs
-import kotlin.math.cos
 import kotlin.math.max
 import kotlin.math.min
-import kotlin.math.sin
 
+private const val APP_VERSION = "5.0.0"
 private const val LAN_UDP_PORT = 45890
 private const val LAN_WS_PORT = 45891
+private const val PROTO_V5 = "continuum-lan-v5"
 private const val PROTO_V4 = "continuum-lan-v4"
 private const val PROTO_V3 = "continuum-lan-v3"
 private const val MULTICAST_ADDR = "239.255.45.90"
 private const val WS_GUID = "258EAFA5-E914-47DA-95CA-C5AB0DC85B11"
 
-// Holographic Spatial Obsidian Palette
-private val C_VOID = Color.parseColor("#050810")
-private val C_SURFACE = Color.parseColor("#0A101E")
-private val C_GLASS = Color.parseColor("#111A2E")
-private val C_GLASS_SUBTLE = Color.parseColor("#0D1526")
-private val C_BORDER = Color.parseColor("#1E3354")
+// Refined Obsidian-Sapphire Holographic Palette (60-30-10 discipline)
+private val C_BG = Color.parseColor("#060A13")
+private val C_SIDEBAR = Color.parseColor("#0A101E")
+private val C_SURFACE = Color.parseColor("#0F172A")
+private val C_CARD = Color.parseColor("#111B2E")
+private val C_CARD_SUBTLE = Color.parseColor("#0B1324")
+private val C_BORDER = Color.parseColor("#1E314F")
+private val C_BORDER_STRONG = Color.parseColor("#2B4770")
 private val C_CYAN = Color.parseColor("#22D3EE")
-private val C_COBALT = Color.parseColor("#3B82F6")
+private val C_BLUE = Color.parseColor("#3B82F6")
 private val C_VIOLET = Color.parseColor("#8B5CF6")
 private val C_GREEN = Color.parseColor("#10B981")
 private val C_AMBER = Color.parseColor("#F59E0B")
+private val C_RED = Color.parseColor("#EF4444")
 private val C_TEXT = Color.parseColor("#F1F5F9")
-private val C_MUTED = Color.parseColor("#8BA3C4")
+private val C_MUTED = Color.parseColor("#94A3B8")
+private val C_DIM = Color.parseColor("#64748B")
 
 data class MeshDevice(
     val id: String,
@@ -265,7 +278,8 @@ data class MeshDevice(
     var y: Float,
     var cpu: Int,
     var ram: Int,
-    var battery: Int?
+    var battery: Int?,
+    var lanIp: String = ""
 )
 
 data class DiscoveredLanHub(
@@ -276,27 +290,28 @@ data class DiscoveredLanHub(
     val wsPort: Int,
     val roomCode: String,
     val via: String,
+    val remotePeers: Int,
     val lastSeenMs: Long
 )
 
 data class ClipItem(val id: String, val content: String, val source: String)
 data class NotifItem(val id: String, val title: String, val body: String, val source: String)
 
-private fun dpToPx(ctx: Context, dp: Int): Int =
-    TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, dp.toFloat(), ctx.resources.displayMetrics).toInt()
+private fun dp(ctx: Context, value: Int): Int =
+    TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, value.toFloat(), ctx.resources.displayMetrics).toInt()
 
-private fun glassDrawable(fill: Int, stroke: Int, radiusDp: Float, ctx: Context, strokeDp: Int = 1): GradientDrawable {
+private fun roundedBg(fill: Int, stroke: Int, radiusDp: Float, ctx: Context, strokeDp: Int = 1): GradientDrawable {
     return GradientDrawable().apply {
         setColor(fill)
         cornerRadius = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, radiusDp, ctx.resources.displayMetrics)
-        if (stroke != 0) setStroke(dpToPx(ctx, strokeDp), stroke)
+        if (stroke != 0) setStroke(dp(ctx, strokeDp), stroke)
     }
 }
 
-private fun holoGradientButton(ctx: Context, radiusDp: Float = 12f): GradientDrawable {
+private fun primaryGradientBg(ctx: Context, radiusDp: Float = 10f): GradientDrawable {
     return GradientDrawable(
         GradientDrawable.Orientation.TL_BR,
-        intArrayOf(Color.parseColor("#0891B2"), C_COBALT, C_VIOLET)
+        intArrayOf(Color.parseColor("#0891B2"), C_BLUE, Color.parseColor("#6366F1"))
     ).apply {
         cornerRadius = TypedValue.applyDimension(TypedValue.COMPLEX_UNIT_DIP, radiusDp, ctx.resources.displayMetrics)
     }
@@ -314,9 +329,7 @@ private fun getLocalLanIp(): String {
                 val addr = addrs.nextElement()
                 if (addr is Inet4Address && !addr.isLoopbackAddress) {
                     val ip = addr.hostAddress ?: continue
-                    if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) {
-                        return ip
-                    }
+                    if (ip.startsWith("192.168.") || ip.startsWith("10.") || ip.startsWith("172.")) return ip
                     if (fallback == null) fallback = ip
                 }
             }
@@ -326,11 +339,6 @@ private fun getLocalLanIp(): String {
     return "127.0.0.1"
 }
 
-/**
- * Bulletproof LAN Endpoint Parser:
- * Accepts http://192.168.1.42:45891, https://..., ws://..., 192.168.1.42:45891,
- * 192.168.1.42, or shorthand ".42" / "42" (auto-completes current Wi-Fi /24 prefix!).
- */
 private fun parseLanEndpoint(rawInput: String, localIp: String): Pair<String, Int>? {
     var s = rawInput.trim()
     if (s.isEmpty()) return null
@@ -340,7 +348,6 @@ private fun parseLanEndpoint(rawInput: String, localIp: String): Pair<String, In
     s = s.trim()
     if (s.isEmpty()) return null
 
-    // Shorthand ".42" or "42" -> auto-complete current subnet prefix
     val dotTrimmed = s.removePrefix(".")
     if (dotTrimmed.matches(Regex("^[0-9]{1,3}(:[0-9]{2,5})?\\$"))) {
         val parts = localIp.split('.')
@@ -365,8 +372,7 @@ private fun parseLanEndpoint(rawInput: String, localIp: String): Pair<String, In
 }
 
 // ---------------------------------------------------------------------------
-// Embedded Lightweight RFC-6455 LAN Hub on Android (TCP 45891)
-// Enables PCs (Linux/Windows) to connect OUTBOUND to Android even if PC firewall blocks!
+// Embedded RFC-6455 LAN Hub on Android (TCP 45891) — Full Fragmented Frame Support
 // ---------------------------------------------------------------------------
 class EmbeddedAndroidLanHub(
     val hubId: String,
@@ -402,6 +408,7 @@ class EmbeddedAndroidLanHub(
                 while (active) {
                     try {
                         val sock = ss.accept()
+                        try { sock.tcpNoDelay = true; sock.keepAlive = true } catch (_: Exception) { }
                         Thread { handleClient(sock) }.apply { isDaemon = true; start() }
                     } catch (_: Exception) {
                         if (!active) break
@@ -424,10 +431,14 @@ class EmbeddedAndroidLanHub(
 
     fun peerCount(room: String): Int = rooms[room]?.devices?.size ?: 0
 
+    fun remotePeerCount(): Int = sessions.count { it.deviceId != null && it.deviceId != hubId }
+
+    fun hasRemotePeers(): Boolean = remotePeerCount() > 0
+
     private fun getRoomData(code: String): RoomData = rooms.getOrPut(code) { RoomData() }
 
     private fun encodeFrame(payload: ByteArray, opcode: Int = 0x1): ByteArray {
-        val baos = ByteArrayOutputStream()
+        val baos = ByteArrayOutputStream(payload.size + 10)
         baos.write(0x80 or (opcode and 0x0F))
         when {
             payload.size < 126 -> baos.write(payload.size)
@@ -511,7 +522,7 @@ class EmbeddedAndroidLanHub(
                 val room = getRoom()
                 val info = JSONObject()
                     .put("ok", true)
-                    .put("proto", PROTO_V4)
+                    .put("proto", PROTO_V5)
                     .put("hubId", hubId)
                     .put("hubName", hubName)
                     .put("os", "android")
@@ -520,6 +531,8 @@ class EmbeddedAndroidLanHub(
                     .put("ip", getLocalLanIp())
                     .put("startedAt", startedAt)
                     .put("peers", peerCount(room))
+                    .put("remotePeers", remotePeerCount())
+                    .put("version", APP_VERSION)
                     .toString()
                     .toByteArray(Charsets.UTF_8)
                 val resp = ("HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nContent-Length: \${info.size}\\r\\nConnection: close\\r\\n\\r\\n").toByteArray(Charsets.US_ASCII)
@@ -540,8 +553,12 @@ class EmbeddedAndroidLanHub(
             session = s
             sessions.add(s)
 
+            val fragBuf = ByteArrayOutputStream()
+            var fragOpcode = 0
+
             while (active) {
                 val h = readExact(ins, 2) ?: break
+                val fin = (h[0].toInt() and 0x80) != 0
                 val opcode = h[0].toInt() and 0x0F
                 val masked = (h[1].toInt() and 0x80) != 0
                 var len = (h[1].toInt() and 0x7F).toLong()
@@ -554,7 +571,7 @@ class EmbeddedAndroidLanHub(
                     for (i in 0 until 8) u = (u shl 8) or (ext[i].toLong() and 0xFF)
                     len = u
                 }
-                if (len < 0 || len > 16 * 1024 * 1024) break
+                if (len < 0 || len > 32 * 1024 * 1024) break
                 val mask = if (masked) (readExact(ins, 4) ?: break) else null
                 val payload = if (len > 0) (readExact(ins, len.toInt()) ?: break) else ByteArray(0)
                 if (mask != null) {
@@ -565,9 +582,31 @@ class EmbeddedAndroidLanHub(
                     synchronized(s.out) { s.out.write(encodeFrame(payload, 0xA)); s.out.flush() }
                     continue
                 }
-                if (opcode != 0x1) continue
+                if (opcode == 0xA) continue
+
+                val finalPayload: ByteArray
+                val effOpcode: Int
+                if (opcode != 0x0) {
+                    if (fin) {
+                        effOpcode = opcode
+                        finalPayload = payload
+                    } else {
+                        fragBuf.reset()
+                        fragBuf.write(payload)
+                        fragOpcode = opcode
+                        continue
+                    }
+                } else {
+                    fragBuf.write(payload)
+                    if (!fin) continue
+                    effOpcode = fragOpcode
+                    finalPayload = fragBuf.toByteArray()
+                    fragBuf.reset()
+                }
+
+                if (effOpcode != 0x1) continue
                 try {
-                    processMessage(s, JSONObject(String(payload, Charsets.UTF_8)))
+                    processMessage(s, JSONObject(String(finalPayload, Charsets.UTF_8)))
                 } catch (_: Exception) { }
             }
         } catch (_: Exception) {
@@ -651,7 +690,7 @@ class EmbeddedAndroidLanHub(
                 dev.put("y", msg.optDouble("y", 140.0))
                 broadcastRoom(room, JSONObject().put("type", "device:updated").put("device", dev))
             }
-            "input:event", "file:start", "file:chunk", "file:complete" -> {
+            "input:event", "file:start", "file:chunk", "file:complete", "screen:start", "screen:frame", "screen:stop", "screen:request" -> {
                 val room = s.roomCode ?: return
                 val tid = msg.optString("targetDeviceId")
                 if (tid.isNotBlank()) sendToDevice(room, tid, msg, s) else broadcastRoom(room, msg, s)
@@ -688,7 +727,117 @@ class EmbeddedAndroidLanHub(
 }
 
 // ---------------------------------------------------------------------------
-// Holographic 60 FPS Spatial Device Map View (Radar Sweep + Flowing Data Packets + Radial Gauges)
+// 1. Live Second Screen Canvas (Hardware-Accelerated Native Extended Monitor + Direct Touch)
+// ---------------------------------------------------------------------------
+class LiveScreenView(
+    context: Context,
+    private val onAbsMove: (Float, Float) -> Unit,
+    private val onAbsClick: (Float, Float, String) -> Unit,
+    private val onScroll: (Float) -> Unit
+) : View(context) {
+    private val density = context.resources.displayMetrics.density
+    @Volatile private var currentBitmap: Bitmap? = null
+    private val bmpPaint = Paint(Paint.FILTER_BITMAP_FLAG or Paint.ANTI_ALIAS_FLAG)
+    private val bgPaint = Paint().apply { color = Color.parseColor("#04070E") }
+    private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(120, 34, 211, 238); style = Paint.Style.STROKE; strokeWidth = 1.5f * density }
+    private val hudPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_MUTED; textSize = 13f * density; textAlign = Paint.Align.CENTER }
+    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_TEXT; textSize = 16f * density; textAlign = Paint.Align.CENTER; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
+
+    private val destRect = RectF()
+    private val srcRect = Rect()
+    private var downX = 0f
+    private var downY = 0f
+    private var lastY = 0f
+    private var moved = false
+    private var twoFinger = false
+    private var downTime = 0L
+
+    fun updateFrame(bmp: Bitmap?) {
+        val old = currentBitmap
+        currentBitmap = bmp
+        if (old != null && old !== bmp && !old.isRecycled) {
+            try { old.recycle() } catch (_: Exception) { }
+        }
+        postInvalidate()
+    }
+
+    fun hasStream(): Boolean = currentBitmap != null
+
+    override fun onDraw(canvas: Canvas) {
+        super.onDraw(canvas)
+        if (width <= 4 || height <= 4) return
+        canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
+
+        val bmp = currentBitmap
+        if (bmp == null || bmp.isRecycled) {
+            val cx = width / 2f
+            val cy = height / 2f
+            val boxW = min(width * 0.72f, 360f * density)
+            val boxH = 128f * density
+            canvas.drawRoundRect(RectF(cx - boxW / 2f, cy - boxH / 2f, cx + boxW / 2f, cy + boxH / 2f), 16f * density, 16f * density, borderPaint)
+            canvas.drawText("Segunda Tela Pronta para Receber", cx, cy - 10f * density, titlePaint)
+            canvas.drawText("Toque em 'Iniciar Extensão do PC' abaixo ou no seu computador.", cx, cy + 18f * density, hudPaint)
+            return
+        }
+
+        val bw = bmp.width.toFloat()
+        val bh = bmp.height.toFloat()
+        val scale = min(width / bw, height / bh)
+        val dw = bw * scale
+        val dh = bh * scale
+        val left = (width - dw) / 2f
+        val top = (height - dh) / 2f
+        srcRect.set(0, 0, bmp.width, bmp.height)
+        destRect.set(left, top, left + dw, top + dh)
+        canvas.drawBitmap(bmp, srcRect, destRect, bmpPaint)
+    }
+
+    private fun toNormalized(x: Float, y: Float): Pair<Float, Float>? {
+        if (destRect.width() <= 1f || destRect.height() <= 1f) return null
+        val nx = ((x - destRect.left) / destRect.width()).coerceIn(0f, 1f)
+        val ny = ((y - destRect.top) / destRect.height()).coerceIn(0f, 1f)
+        return Pair(nx, ny)
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        if (currentBitmap == null) return false
+        val now = SystemClock.uptimeMillis()
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                downX = event.x; downY = event.y; lastY = event.y
+                moved = false; twoFinger = false; downTime = now
+                toNormalized(event.x, event.y)?.let { (nx, ny) -> onAbsMove(nx, ny) }
+            }
+            MotionEvent.ACTION_POINTER_DOWN -> {
+                twoFinger = event.pointerCount >= 2
+                lastY = event.y
+            }
+            MotionEvent.ACTION_MOVE -> {
+                if (abs(event.x - downX) > 6f || abs(event.y - downY) > 6f) moved = true
+                if (twoFinger || event.pointerCount >= 2) {
+                    val dy = event.y - lastY
+                    lastY = event.y
+                    if (abs(dy) > 2f) onScroll(dy * 2.5f)
+                } else {
+                    toNormalized(event.x, event.y)?.let { (nx, ny) -> onAbsMove(nx, ny) }
+                }
+            }
+            MotionEvent.ACTION_UP -> {
+                if (!moved && (now - downTime) < 300L) {
+                    performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                    toNormalized(event.x, event.y)?.let { (nx, ny) ->
+                        onAbsClick(nx, ny, if (twoFinger) "right" else "left")
+                    }
+                }
+                twoFinger = false
+            }
+        }
+        return true
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 2. Holographic 60 FPS Spatial Device Map View
 // ---------------------------------------------------------------------------
 class HolographicSpatialMapView(context: Context) : View(context) {
     var devices: MutableList<MeshDevice> = mutableListOf()
@@ -700,8 +849,8 @@ class HolographicSpatialMapView(context: Context) : View(context) {
     var onMoved: ((String, Float, Float) -> Unit)? = null
 
     private val density = context.resources.displayMetrics.density
-    private val nodeW = 174f * density
-    private val nodeH = 98f * density
+    private val nodeW = 186f * density
+    private val nodeH = 104f * density
     private var dragId: String? = null
     private var dragOffX = 0f
     private var dragOffY = 0f
@@ -709,8 +858,7 @@ class HolographicSpatialMapView(context: Context) : View(context) {
     private var phase = 0f
 
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(42, 34, 211, 238); strokeWidth = 0.8f * density }
-    private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(90, 34, 211, 238); strokeWidth = 1f * density }
+    private val crossPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(65, 34, 211, 238); strokeWidth = 1f * density }
     private val radarRingPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.2f * density }
     private val radarSweepPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val linkGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
@@ -718,19 +866,19 @@ class HolographicSpatialMapView(context: Context) : View(context) {
     private val cardFillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
     private val cardGlowPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
-    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.5f * density; color = C_CYAN }
-    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_TEXT; textSize = 12.2f * density; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
-    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_MUTED; textSize = 9.8f * density }
-    private val gaugeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f * density; color = Color.argb(90, 30, 51, 84) }
+    private val iconPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 1.6f * density; color = C_CYAN }
+    private val titlePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_TEXT; textSize = 12.5f * density; typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD) }
+    private val subPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_MUTED; textSize = 10f * density }
+    private val gaugeBgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f * density; color = Color.argb(95, 30, 51, 84) }
     private val gaugeValPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 3f * density; strokeCap = Paint.Cap.ROUND }
-    private val gaugeTxtPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_TEXT; textSize = 8.5f * density; textAlign = Paint.Align.CENTER; typeface = Typeface.MONOSPACE }
+    private val gaugeTxtPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = C_TEXT; textSize = 8.8f * density; textAlign = Paint.Align.CENTER; typeface = Typeface.MONOSPACE }
 
     private fun screenPos(d: MeshDevice): Pair<Float, Float> {
         val sx = (d.x / 720f) * max(width.toFloat(), 320f)
         val sy = (d.y / 480f) * max(height.toFloat(), 300f)
         return Pair(
-            sx.coerceIn(nodeW / 2f + 12f, max(nodeW / 2f + 14f, width - nodeW / 2f - 12f)),
-            sy.coerceIn(nodeH / 2f + 12f, max(nodeH / 2f + 14f, height - nodeH / 2f - 12f))
+            sx.coerceIn(nodeW / 2f + 16f, max(nodeW / 2f + 18f, width - nodeW / 2f - 16f)),
+            sy.coerceIn(nodeH / 2f + 16f, max(nodeH / 2f + 18f, height - nodeH / 2f - 16f))
         )
     }
 
@@ -741,12 +889,8 @@ class HolographicSpatialMapView(context: Context) : View(context) {
 
     private fun cubicPoint(t: Float, x0: Float, y0: Float, x1: Float, y1: Float, x2: Float, y2: Float, x3: Float, y3: Float): Pair<Float, Float> {
         val u = 1f - t
-        val tt = t * t
-        val uu = u * u
-        val uuu = uu * u
-        val ttt = tt * t
-        val x = uuu * x0 + 3f * uu * t * x1 + 3f * u * tt * x2 + ttt * x3
-        val y = uuu * y0 + 3f * uu * t * y1 + 3f * u * tt * y2 + ttt * y3
+        val x = u * u * u * x0 + 3f * u * u * t * x1 + 3f * u * t * t * x2 + t * t * t * x3
+        val y = u * u * u * y0 + 3f * u * u * t * y1 + 3f * u * t * t * y2 + t * t * t * y3
         return Pair(x, y)
     }
 
@@ -760,13 +904,12 @@ class HolographicSpatialMapView(context: Context) : View(context) {
 
         val cx = width / 2f
         val cy = height / 2f
+        val maxR = min(width, height) * 0.44f
 
-        // 1. Deep Space Radial Gradient Backdrop
-        bgPaint.shader = RadialGradient(cx, cy, max(width, height) * 0.78f, Color.parseColor("#0D182D"), C_VOID, Shader.TileMode.CLAMP)
+        bgPaint.shader = RadialGradient(cx, cy, max(width, height) * 0.78f, Color.parseColor("#0D182D"), C_BG, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        // 2. Holographic Perspective Matrix & Crosshairs
-        val step = (30f * density).toInt().coerceAtLeast(28)
+        val step = (34f * density).toInt().coerceAtLeast(32)
         var gx = step
         while (gx < width) {
             var gy = step
@@ -778,24 +921,21 @@ class HolographicSpatialMapView(context: Context) : View(context) {
             gx += step
         }
 
-        // 3. Holographic Concentric Radar Rings & Sweeping Beam
-        val maxR = min(width, height) * 0.46f
         for (i in 1..3) {
-            radarRingPaint.color = Color.argb(if (scanning) 55 else 24, 34, 211, 238)
+            radarRingPaint.color = Color.argb(if (scanning) 50 else 22, 34, 211, 238)
             canvas.drawCircle(cx, cy, maxR * (i / 3f), radarRingPaint)
         }
-        val pulseR = ((phase * 0.55f) % 1f) * maxR
-        val pulseAlpha = ((1f - (pulseR / max(1f, maxR))) * (if (scanning) 130 else 55)).toInt().coerceIn(0, 255)
+        val pulseR = ((phase * 0.5f) % 1f) * maxR
+        val pulseAlpha = ((1f - (pulseR / max(1f, maxR))) * (if (scanning) 125 else 50)).toInt().coerceIn(0, 255)
         radarRingPaint.color = Color.argb(pulseAlpha, 34, 211, 238)
         canvas.drawCircle(cx, cy, pulseR, radarRingPaint)
 
         if (scanning || devices.size <= 1) {
             canvas.save()
-            val angleDeg = (phase * 115f) % 360f
-            canvas.rotate(angleDeg, cx, cy)
+            canvas.rotate((phase * 110f) % 360f, cx, cy)
             radarSweepPaint.shader = SweepGradient(
                 cx, cy,
-                intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(65, 34, 211, 238)),
+                intArrayOf(Color.TRANSPARENT, Color.TRANSPARENT, Color.argb(60, 34, 211, 238)),
                 floatArrayOf(0f, 0.78f, 1f)
             )
             canvas.drawCircle(cx, cy, maxR, radarSweepPaint)
@@ -805,15 +945,14 @@ class HolographicSpatialMapView(context: Context) : View(context) {
         if (devices.isEmpty()) {
             subPaint.textAlign = Paint.Align.CENTER
             subPaint.color = C_CYAN
-            val msg = if (scanning) "Radar Holográfico escaneando Wi-Fi... \$scanProgress%" else "Escaneando dispositivos Linux / Windows na rede local..."
-            canvas.drawText(msg, cx, cy + maxR * 0.55f, subPaint)
+            val msg = if (scanning) "Radar escaneando dispositivos Wi-Fi... \$scanProgress%" else "Aguardando dispositivos Linux ou Windows na mesma rede..."
+            canvas.drawText(msg, cx, cy + maxR * 0.52f, subPaint)
             subPaint.textAlign = Paint.Align.LEFT
             subPaint.color = C_MUTED
             postInvalidateOnAnimation()
             return
         }
 
-        // 4. Glowing Bezier Mesh Links + Animated Energy Data Packets
         val anchor = devices.firstOrNull { it.id == selfId } ?: devices.first()
         val (ax, ay) = screenPos(anchor)
         for (d in devices) {
@@ -821,23 +960,17 @@ class HolographicSpatialMapView(context: Context) : View(context) {
             val (dx, dy) = screenPos(d)
             val isSel = d.id == selectedId
             val mx = (ax + dx) / 2f
-            val path = Path().apply {
-                moveTo(ax, ay)
-                cubicTo(mx, ay, mx, dy, dx, dy)
-            }
-            // Outer glow
-            linkGlowPaint.shader = LinearGradient(ax, ay, dx, dy, C_CYAN, if (isSel) C_VIOLET else C_COBALT, Shader.TileMode.CLAMP)
-            linkGlowPaint.alpha = if (isSel) 95 else 48
+            val path = Path().apply { moveTo(ax, ay); cubicTo(mx, ay, mx, dy, dx, dy) }
+            linkGlowPaint.shader = LinearGradient(ax, ay, dx, dy, C_CYAN, if (isSel) C_VIOLET else C_BLUE, Shader.TileMode.CLAMP)
+            linkGlowPaint.alpha = if (isSel) 90 else 44
             linkGlowPaint.strokeWidth = (if (isSel) 7f else 4f) * density
             canvas.drawPath(path, linkGlowPaint)
-            // Crisp holographic beam core
             linkGlowPaint.alpha = if (isSel) 235 else 155
             linkGlowPaint.strokeWidth = (if (isSel) 2.2f else 1.4f) * density
             canvas.drawPath(path, linkGlowPaint)
 
-            // Flowing energy packets
             for (k in 0..1) {
-                val t = ((phase * 0.65f + k * 0.5f) % 1f)
+                val t = ((phase * 0.6f + k * 0.5f) % 1f)
                 val (px, py) = cubicPoint(t, ax, ay, mx, ay, mx, dy, dx, dy)
                 packetPaint.color = Color.argb(90, 34, 211, 238)
                 canvas.drawCircle(px, py, 6f * density, packetPaint)
@@ -846,36 +979,32 @@ class HolographicSpatialMapView(context: Context) : View(context) {
             }
         }
 
-        // 5. Frosted Holographic Device Cards with Radial CPU/RAM Arc Gauges
         val rCorner = 14f * density
         for (d in devices) {
             val r = nodeRect(d)
             val isSelf = d.id == selfId
             val isSel = d.id == selectedId
 
-            // Soft holographic aura around selected or local node
             if (isSel || isSelf) {
                 cardGlowPaint.color = if (isSel) Color.argb(65, 34, 211, 238) else Color.argb(45, 16, 185, 129)
                 cardGlowPaint.strokeWidth = 6f * density
                 canvas.drawRoundRect(RectF(r.left - 1f, r.top - 1f, r.right + 1f, r.bottom + 1f), rCorner, rCorner, cardGlowPaint)
             }
 
-            // Frosted dark glass body
             cardFillPaint.shader = LinearGradient(
                 r.left, r.top, r.right, r.bottom,
-                if (isSel) Color.argb(235, 22, 36, 62) else Color.argb(220, 15, 23, 40),
-                Color.argb(228, 9, 14, 26),
+                if (isSel) Color.argb(238, 22, 36, 62) else Color.argb(225, 15, 23, 40),
+                Color.argb(235, 9, 14, 26),
                 Shader.TileMode.CLAMP
             )
             canvas.drawRoundRect(r, rCorner, rCorner, cardFillPaint)
 
-            // Iridescent Holographic Border
             borderPaint.shader = LinearGradient(
                 r.left, r.top, r.right, r.bottom,
                 when {
-                    isSel -> intArrayOf(C_CYAN, C_COBALT, C_VIOLET)
+                    isSel -> intArrayOf(C_CYAN, C_BLUE, C_VIOLET)
                     isSelf -> intArrayOf(C_GREEN, C_CYAN)
-                    else -> intArrayOf(Color.parseColor("#2B4870"), Color.parseColor("#1D2E4D"))
+                    else -> intArrayOf(C_BORDER_STRONG, C_BORDER)
                 },
                 null,
                 Shader.TileMode.CLAMP
@@ -883,10 +1012,9 @@ class HolographicSpatialMapView(context: Context) : View(context) {
             borderPaint.strokeWidth = (if (isSel) 2f else 1.2f) * density
             canvas.drawRoundRect(r, rCorner, rCorner, borderPaint)
 
-            // Vector Hardware Glyph (Phone vs Desktop Monitor)
-            val ix = r.left + 13f * density
-            val iy = r.top + 13f * density
-            iconPaint.color = if (isSel) C_CYAN else (if (isSelf) C_GREEN else C_COBALT)
+            val ix = r.left + 14f * density
+            val iy = r.top + 14f * density
+            iconPaint.color = if (isSel) C_CYAN else (if (isSelf) C_GREEN else C_BLUE)
             if (d.os.equals("android", true) || d.os.equals("ios", true)) {
                 canvas.drawRoundRect(RectF(ix, iy, ix + 11f * density, iy + 18f * density), 2.5f * density, 2.5f * density, iconPaint)
                 canvas.drawLine(ix + 4f * density, iy + 15f * density, ix + 7f * density, iy + 15f * density, iconPaint)
@@ -896,18 +1024,15 @@ class HolographicSpatialMapView(context: Context) : View(context) {
                 canvas.drawLine(ix + 8f * density, iy + 12f * density, ix + 8f * density, iy + 15f * density, iconPaint)
             }
 
-            // Title & OS Role
-            val label = if (d.name.length > 15) d.name.substring(0, 15) else d.name
-            canvas.drawText(label, r.left + 35f * density, r.top + 23f * density, titlePaint)
+            val label = if (d.name.length > 16) d.name.substring(0, 16) else d.name
+            canvas.drawText(label, r.left + 38f * density, r.top + 24f * density, titlePaint)
             val role = if (isSelf) "Este Dispositivo" else if (isSel) "Alvo Ativo" else "LAN Direta"
             val bat = if (d.battery != null) " · \${d.battery}%" else ""
-            canvas.drawText("\${d.os.uppercase()} · \$role\$bat", r.left + 35f * density, r.top + 37f * density, subPaint)
+            canvas.drawText("\${d.os.uppercase()} · \$role\$bat", r.left + 38f * density, r.top + 39f * density, subPaint)
 
-            // Dual Radial Arc Gauges (CPU & RAM)
-            drawRadialGauge(canvas, r.left + 44f * density, r.top + 70f * density, 16f * density, d.cpu, "CPU", C_CYAN)
-            drawRadialGauge(canvas, r.left + 112f * density, r.top + 70f * density, 16f * density, d.ram, "RAM", C_VIOLET)
+            drawRadialGauge(canvas, r.left + 46f * density, r.top + 74f * density, 16f * density, d.cpu, "CPU", C_CYAN)
+            drawRadialGauge(canvas, r.left + 120f * density, r.top + 74f * density, 16f * density, d.ram, "RAM", C_VIOLET)
         }
-
         postInvalidateOnAnimation()
     }
 
@@ -952,9 +1077,7 @@ class HolographicSpatialMapView(context: Context) : View(context) {
             MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                 val id = dragId
                 dragId = null
-                if (id != null) {
-                    devices.firstOrNull { it.id == id }?.let { onMoved?.invoke(id, it.x, it.y) }
-                }
+                if (id != null) devices.firstOrNull { it.id == id }?.let { onMoved?.invoke(id, it.x, it.y) }
                 return true
             }
         }
@@ -963,7 +1086,7 @@ class HolographicSpatialMapView(context: Context) : View(context) {
 }
 
 // ---------------------------------------------------------------------------
-// Holographic Multi-Touch Trackpad (HUD Brackets + Luminous Comet Trail + Shockwaves)
+// 3. Holographic Multi-Touch Trackpad View
 // ---------------------------------------------------------------------------
 class HolographicTrackpadView(
     context: Context,
@@ -988,7 +1111,7 @@ class HolographicTrackpadView(
     private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG)
     private val dotPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(65, 34, 211, 238) }
     private val bracketPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(145, 34, 211, 238); style = Paint.Style.STROKE; strokeWidth = 2f * density; strokeCap = Paint.Cap.ROUND }
-    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(145, 139, 163, 196); textSize = 12f * density; textAlign = Paint.Align.CENTER }
+    private val hintPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(155, 148, 163, 184); textSize = 12.5f * density; textAlign = Paint.Align.CENTER }
     private val trailPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeCap = Paint.Cap.ROUND }
     private val ripplePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE; strokeWidth = 2f * density }
     private val glowPaint = Paint(Paint.ANTI_ALIAS_FLAG)
@@ -997,11 +1120,10 @@ class HolographicTrackpadView(
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
         if (width <= 4 || height <= 4) return
-        bgPaint.shader = RadialGradient(width / 2f, height / 2f, max(width, height) * 0.7f, Color.parseColor("#0C162A"), C_VOID, Shader.TileMode.CLAMP)
+        bgPaint.shader = RadialGradient(width / 2f, height / 2f, max(width, height) * 0.7f, Color.parseColor("#0C162A"), C_BG, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
-        // Precision Holographic Dot Matrix
-        val step = (24f * density).toInt().coerceAtLeast(24)
+        val step = (26f * density).toInt().coerceAtLeast(24)
         var gx = step
         while (gx < width) {
             var gy = step
@@ -1012,21 +1134,18 @@ class HolographicTrackpadView(
             gx += step
         }
 
-        // HUD Corner Brackets
-        val m = 14f * density
-        val b = 18f * density
+        val m = 16f * density
+        val b = 20f * density
         canvas.drawLine(m, m, m + b, m, bracketPaint); canvas.drawLine(m, m, m, m + b, bracketPaint)
         canvas.drawLine(width - m, m, width - m - b, m, bracketPaint); canvas.drawLine(width - m, m, width - m, m + b, bracketPaint)
         canvas.drawLine(m, height - m, m + b, height - m, bracketPaint); canvas.drawLine(m, height - m, m, height - m - b, bracketPaint)
         canvas.drawLine(width - m, height - m, width - m - b, height - m, bracketPaint); canvas.drawLine(width - m, height - m, width - m, height - m - b, bracketPaint)
 
         if (touchX < 0f) {
-            canvas.drawText("1 dedo: cursor & toque esq · 2 dedos: scroll & toque dir", width / 2f, height / 2f, hintPaint)
+            canvas.drawText("1 dedo: mover e tocar (esq.)  ·  2 dedos: rolar e tocar (dir.)", width / 2f, height / 2f, hintPaint)
         }
 
         val now = SystemClock.uptimeMillis()
-
-        // Luminous Comet Trail
         trail.removeAll { now - it.t0 > 260L }
         for (i in 1 until trail.size) {
             val p0 = trail[i - 1]
@@ -1038,7 +1157,6 @@ class HolographicTrackpadView(
             canvas.drawLine(p0.x, p0.y, p1.x, p1.y, trailPaint)
         }
 
-        // Multi-ring Holographic Shockwaves
         ripples.removeAll { now - it.t0 > 460L }
         for (rp in ripples) {
             val p = (now - rp.t0) / 460f
@@ -1049,7 +1167,6 @@ class HolographicTrackpadView(
             canvas.drawCircle(rp.x, rp.y, (6f + p * 34f) * density, ripplePaint)
         }
 
-        // Glowing Holographic Reticle
         if (touchX >= 0f && touchY >= 0f) {
             glowPaint.shader = RadialGradient(touchX, touchY, 34f * density, Color.argb(145, 34, 211, 238), Color.TRANSPARENT, Shader.TileMode.CLAMP)
             canvas.drawCircle(touchX, touchY, 34f * density, glowPaint)
@@ -1063,23 +1180,18 @@ class HolographicTrackpadView(
         val now = SystemClock.uptimeMillis()
         when (event.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                lastX = event.x; lastY = event.y
-                touchX = event.x; touchY = event.y
+                lastX = event.x; lastY = event.y; touchX = event.x; touchY = event.y
                 moved = false; twoFinger = false; downTime = now
-                trail.clear()
-                trail.add(TrailPt(event.x, event.y, now))
+                trail.clear(); trail.add(TrailPt(event.x, event.y, now))
                 ripples.add(Ripple(event.x, event.y, now))
                 invalidate()
             }
             MotionEvent.ACTION_POINTER_DOWN -> {
-                twoFinger = event.pointerCount >= 2
-                lastX = event.x; lastY = event.y
+                twoFinger = event.pointerCount >= 2; lastX = event.x; lastY = event.y
             }
             MotionEvent.ACTION_MOVE -> {
-                val dx = event.x - lastX
-                val dy = event.y - lastY
-                lastX = event.x; lastY = event.y
-                touchX = event.x; touchY = event.y
+                val dx = event.x - lastX; val dy = event.y - lastY
+                lastX = event.x; lastY = event.y; touchX = event.x; touchY = event.y
                 trail.add(TrailPt(event.x, event.y, now))
                 if (trail.size > 26) trail.removeAt(0)
                 if (abs(dx) > 1.1f || abs(dy) > 1.1f) {
@@ -1099,8 +1211,7 @@ class HolographicTrackpadView(
                 invalidate()
             }
             MotionEvent.ACTION_CANCEL -> {
-                touchX = -1f; touchY = -1f
-                invalidate()
+                touchX = -1f; touchY = -1f; invalidate()
             }
         }
         return true
@@ -1108,33 +1219,44 @@ class HolographicTrackpadView(
 }
 
 // ---------------------------------------------------------------------------
-// Main Continuum v4.0 Native Android Activity (Holographic UI + 3-Layer Auto LAN Mesh)
+// Main Continuum v5.0 Native Android Activity (Responsive Tablet Sidebar + Phone Dock)
 // ---------------------------------------------------------------------------
 class MainActivity : AppCompatActivity() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private val httpClient = OkHttpClient.Builder()
         .connectTimeout(4, TimeUnit.SECONDS)
         .readTimeout(0, TimeUnit.MILLISECONDS)
-        .pingInterval(15, TimeUnit.SECONDS)
+        .pingInterval(20, TimeUnit.SECONDS)
         .build()
 
-    private val prefs by lazy { getSharedPreferences("continuum_lan_v4", Context.MODE_PRIVATE) }
+    private val prefs by lazy { getSharedPreferences("continuum_lan_v5", Context.MODE_PRIVATE) }
     private val deviceName by lazy { "\${Build.MANUFACTURER.replaceFirstChar { it.uppercase() }} \${Build.MODEL}" }
     private val deviceId by lazy {
         val clean = Build.MODEL.lowercase().replace(Regex("[^a-z0-9]"), "").take(12).ifEmpty { "android" }
         "android-app-\$clean-\${(System.currentTimeMillis() % 8999) + 1000}"
     }
 
+    private val connGen = AtomicInteger(0)
     private var roomCode: String = BuildConfig.DEFAULT_ROOM_CODE
     private var manualHostPort: String = ""
     private var activeWsUrl: String = ""
     private var activeHubLabel: String = ""
     private var ws: WebSocket? = null
-    private var connected = false
+    @Volatile private var connected = false
+    private var consecutiveFailures = 0
     private var rttMs: Int? = null
-    private var destroyed = false
+    @Volatile private var destroyed = false
     private var selectedDeviceId: String? = null
     @Volatile private var scanningLan = false
+    private var isTabletMode = false
+    private var fullscreenScreen = false
+    private var autoClipboardSync = true
+    private var lastSyncedClip: String = ""
+
+    private var screenFpsCount = 0
+    private var screenFpsLastMs = SystemClock.uptimeMillis()
+    private var screenFps = 0
+    private var screenResText = ""
 
     private val devices = mutableListOf<MeshDevice>()
     private val discoveredHubs = ConcurrentHashMap<String, DiscoveredLanHub>()
@@ -1145,26 +1267,43 @@ class MainActivity : AppCompatActivity() {
     private lateinit var localHub: EmbeddedAndroidLanHub
     private var multicastLock: WifiManager.MulticastLock? = null
     private var discoverySocket: DatagramSocket? = null
+    private var clipListener: ClipboardManager.OnPrimaryClipChangedListener? = null
 
-    // UI Elements
+    // Shell & UI References
+    private var sidebarView: View? = null
+    private var bottomDockView: View? = null
+    private lateinit var topBarView: View
+    private lateinit var lblTopSection: TextView
     private lateinit var lblTopStatus: TextView
-    private lateinit var lblTopRoom: TextView
-    private lateinit var btnTopScan: Button
+    private lateinit var lblSidebarStatus: TextView
+    private lateinit var lblSidebarRoom: TextView
     private lateinit var spatialMap: HolographicSpatialMapView
     private lateinit var lblMapSelected: TextView
+    private lateinit var liveScreenView: LiveScreenView
+    private lateinit var lblScreenStatus: TextView
+    private lateinit var screenControlsBar: View
+    private lateinit var btnExitFullscreen: Button
     private lateinit var lblRemoteTarget: TextView
     private lateinit var fileProgress: ProgressBar
     private lateinit var lblFileStatus: TextView
     private lateinit var fileListContainer: LinearLayout
     private lateinit var clipListContainer: LinearLayout
     private lateinit var lanPeersContainer: LinearLayout
+    private lateinit var telemetryContainer: LinearLayout
     private lateinit var lblScanBanner: TextView
     private lateinit var notifListContainer: LinearLayout
     private lateinit var editManualIp: EditText
     private lateinit var editRoom: EditText
 
     private val tabPanels = mutableMapOf<String, View>()
-    private val navBtns = mutableMapOf<String, LinearLayout>()
+    private val navItems = mutableMapOf<String, View>()
+    private val tabTitles = mapOf(
+        "map" to "Mapa Espacial",
+        "screen" to "Segunda Tela",
+        "remote" to "Mouse & Teclado",
+        "transfer" to "Clipboard & Arquivos",
+        "network" to "Rede & Sistema"
+    )
 
     data class IncomingFile(val name: String, val size: Long, val total: Int, val chunks: MutableMap<Int, String> = mutableMapOf())
 
@@ -1178,89 +1317,187 @@ class MainActivity : AppCompatActivity() {
 
         roomCode = prefs.getString("roomCode", BuildConfig.DEFAULT_ROOM_CODE) ?: BuildConfig.DEFAULT_ROOM_CODE
         manualHostPort = prefs.getString("manualHostPort", "") ?: ""
+        autoClipboardSync = prefs.getBoolean("autoClipboardSync", true)
 
-        // Start embedded fallback Hub on Android so Linux/Windows can also connect outbound to Android!
+        val dm = resources.displayMetrics
+        isTabletMode = resources.configuration.smallestScreenWidthDp >= 580 || dm.widthPixels > dm.heightPixels * 1.15f
+
         localHub = EmbeddedAndroidLanHub(deviceId, deviceName, { roomCode }, LAN_WS_PORT)
         localHub.start()
 
         setContentView(buildRootUi())
         switchTab("map")
+        setupAutoClipboardListener()
         startUdpDiscoveryAndResponder()
         startTelemetryHeartbeat()
 
+        // Always connect cleanly to our embedded local hub first so PCs can join immediately,
+        // while simultaneously scanning Wi-Fi for PC hubs!
         if (manualHostPort.isNotBlank()) {
             connectDirectInput(manualHostPort)
         } else {
+            connectToEndpoint("ws://127.0.0.1:\$LAN_WS_PORT/ws", "Hub Local (\${getLocalLanIp()})", force = true)
             runFastLanSubnetScan(autoConnect = true)
         }
     }
 
     private fun buildRootUi(): View {
-        val root = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            setBackgroundColor(C_VOID)
+        val outer = LinearLayout(this).apply {
+            orientation = if (isTabletMode) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+            setBackgroundColor(C_BG)
             layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
         }
 
-        // ==================== HOLOGRAPHIC TOP BAR ====================
+        val tabs = listOf(
+            Triple("map", "Mapa Espacial", "Mapa"),
+            Triple("screen", "Segunda Tela", "Tela"),
+            Triple("remote", "Mouse & Teclado", "Mouse"),
+            Triple("transfer", "Clipboard & Arquivos", "Clip"),
+            Triple("network", "Rede & Sistema", "Rede")
+        )
+
+        // ==================== TABLET LEFT SIDEBAR (224dp, Web-App Parity) ====================
+        if (isTabletMode) {
+            val side = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setBackgroundColor(C_SIDEBAR)
+                layoutParams = LinearLayout.LayoutParams(dp(this@MainActivity, 224), ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+            val brand = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(this@MainActivity, 18), dp(this@MainActivity, 16), dp(this@MainActivity, 18), dp(this@MainActivity, 14))
+            }
+            brand.addView(TextView(this).apply {
+                text = "Continuum"
+                setTextColor(C_TEXT)
+                textSize = 18f
+                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+            })
+            brand.addView(TextView(this).apply {
+                text = "Malha Nativa v\$APP_VERSION"
+                setTextColor(C_CYAN)
+                textSize = 11.5f
+            })
+            side.addView(brand)
+            side.addView(hairline())
+
+            val navList = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(this@MainActivity, 12), dp(this@MainActivity, 12), dp(this@MainActivity, 12), dp(this@MainActivity, 12))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+            }
+            for ((key, fullLabel, _) in tabs) {
+                val btn = TextView(this).apply {
+                    text = fullLabel
+                    setTextColor(C_MUTED)
+                    textSize = 14f
+                    gravity = Gravity.CENTER_VERTICAL
+                    maxLines = 1
+                    ellipsize = TextUtils.TruncateAt.END
+                    setPadding(dp(this@MainActivity, 14), dp(this@MainActivity, 12), dp(this@MainActivity, 14), dp(this@MainActivity, 12))
+                    layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 46)).apply {
+                        bottomMargin = dp(this@MainActivity, 6)
+                    }
+                    setOnClickListener {
+                        it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        switchTab(key)
+                    }
+                }
+                navItems[key] = btn
+                navList.addView(btn)
+            }
+            side.addView(navList)
+            side.addView(hairline())
+
+            val footer = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 12), dp(this@MainActivity, 16), dp(this@MainActivity, 16))
+            }
+            lblSidebarRoom = TextView(this).apply {
+                text = "Malha: \$roomCode"
+                setTextColor(C_TEXT)
+                textSize = 12.5f
+                typeface = Typeface.MONOSPACE
+            }
+            lblSidebarStatus = TextView(this).apply {
+                text = "IP: \${getLocalLanIp()}:\$LAN_WS_PORT"
+                setTextColor(C_MUTED)
+                textSize = 11.5f
+                setPadding(0, dp(this@MainActivity, 4), 0, 0)
+            }
+            footer.addView(lblSidebarRoom)
+            footer.addView(lblSidebarStatus)
+            side.addView(footer)
+
+            sidebarView = side
+            outer.addView(side)
+            outer.addView(View(this).apply {
+                setBackgroundColor(C_BORDER)
+                layoutParams = LinearLayout.LayoutParams(dp(this@MainActivity, 1), ViewGroup.LayoutParams.MATCH_PARENT)
+            })
+        } else {
+            lblSidebarRoom = TextView(this)
+            lblSidebarStatus = TextView(this)
+        }
+
+        // ==================== MAIN COLUMN ====================
+        val mainCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = if (isTabletMode) {
+                LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+            } else {
+                LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+            }
+        }
+
+        // Clean 3-Zone Top Bar (58dp)
         val topBar = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             gravity = Gravity.CENTER_VERTICAL
-            setBackgroundColor(C_SURFACE)
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 8), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 8))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 58))
+            setBackgroundColor(C_SIDEBAR)
+            setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 8), dp(this@MainActivity, 16), dp(this@MainActivity, 8))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 58))
         }
-        val brandCol = LinearLayout(this).apply {
+        val titleStack = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(this@MainActivity, 12)
+            }
         }
-        val titleRow = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL }
-        titleRow.addView(TextView(this).apply {
-            text = "CONTINUUM"
-            setTextColor(C_CYAN)
-            textSize = 14.5f
-            letterSpacing = 0.08f
+        lblTopSection = TextView(this).apply {
+            text = "Mapa Espacial"
+            setTextColor(C_TEXT)
+            textSize = 15.5f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-        })
-        lblTopRoom = TextView(this).apply {
-            text = "  ·  \$roomCode"
-            setTextColor(C_MUTED)
-            textSize = 11f
-            typeface = Typeface.MONOSPACE
         }
-        titleRow.addView(lblTopRoom)
-        brandCol.addView(titleRow)
-
         lblTopStatus = TextView(this).apply {
-            text = "◌ Escaneando Wi-Fi automaticamente..."
+            text = "Iniciando radar Wi-Fi..."
             setTextColor(C_CYAN)
             textSize = 11.5f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
         }
-        brandCol.addView(lblTopStatus)
-        topBar.addView(brandCol)
+        titleStack.addView(lblTopSection)
+        titleStack.addView(lblTopStatus)
+        topBar.addView(titleStack)
 
-        btnTopScan = makeHoloBtn("Escanear", true) {
+        val btnScan = makeBtn("Escanear Wi-Fi", primary = true, heightDp = 40) {
             it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-            runFastLanSubnetScan(autoConnect = !connected)
-        }.apply {
-            minHeight = dpToPx(this@MainActivity, 38)
-            minimumHeight = dpToPx(this@MainActivity, 38)
-            textSize = 11.5f
+            runFastLanSubnetScan(autoConnect = !connected || activeWsUrl.startsWith("ws://127.0.0.1"))
         }
-        topBar.addView(btnTopScan)
-        root.addView(topBar)
+        topBar.addView(btnScan, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(this, 40)))
+        topBarView = topBar
+        mainCol.addView(topBar)
+        mainCol.addView(hairline())
 
-        // Glowing cyan-violet top divider
-        root.addView(View(this).apply {
-            background = GradientDrawable(GradientDrawable.Orientation.LEFT_RIGHT, intArrayOf(C_CYAN, C_COBALT, C_VIOLET))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 1))
-        })
-
-        // ==================== CONTENT FRAME ====================
+        // Content Frame
         val frame = FrameLayout(this).apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
         tabPanels["map"] = buildMapTab()
+        tabPanels["screen"] = buildScreenTab()
         tabPanels["remote"] = buildRemoteTab()
         tabPanels["transfer"] = buildTransferTab()
         tabPanels["network"] = buildNetworkTab()
@@ -1268,83 +1505,102 @@ class MainActivity : AppCompatActivity() {
             it.visibility = View.GONE
             frame.addView(it, FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
         }
-        root.addView(frame)
+        mainCol.addView(frame)
 
-        // ==================== FLOATING HOLOGRAPHIC BOTTOM DOCK ====================
-        val dockWrap = FrameLayout(this).apply {
-            setBackgroundColor(C_VOID)
-            setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 6), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10))
-        }
-        val bottomNav = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            background = glassDrawable(C_SURFACE, C_BORDER, 18f, this@MainActivity)
-            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 56))
-        }
-        val tabs = listOf("map" to "Mapa", "remote" to "Trackpad", "transfer" to "Arquivos", "network" to "Rede LAN")
-        for ((key, title) in tabs) {
-            val item = LinearLayout(this).apply {
-                orientation = LinearLayout.VERTICAL
-                gravity = Gravity.CENTER
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
-                setOnClickListener {
-                    it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
-                    switchTab(key)
+        // ==================== PHONE BOTTOM NAVIGATION BAR ====================
+        if (!isTabletMode) {
+            val dock = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setBackgroundColor(C_SIDEBAR)
+                setPadding(dp(this@MainActivity, 6), dp(this@MainActivity, 6), dp(this@MainActivity, 6), dp(this@MainActivity, 8))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 62))
+            }
+            for ((key, _, shortLabel) in tabs) {
+                val cell = LinearLayout(this).apply {
+                    orientation = LinearLayout.VERTICAL
+                    gravity = Gravity.CENTER
+                    layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.MATCH_PARENT, 1f)
+                    setOnClickListener {
+                        it.performHapticFeedback(HapticFeedbackConstants.KEYBOARD_TAP)
+                        switchTab(key)
+                    }
                 }
-            }
-            val indicator = View(this).apply {
-                tag = "ind"
-                background = glassDrawable(Color.TRANSPARENT, 0, 4f, this@MainActivity)
-                layoutParams = LinearLayout.LayoutParams(dpToPx(this@MainActivity, 28), dpToPx(this@MainActivity, 3)).apply {
-                    bottomMargin = dpToPx(this@MainActivity, 5)
+                val ind = View(this).apply {
+                    tag = "ind"
+                    background = roundedBg(Color.TRANSPARENT, 0, 3f, this@MainActivity)
+                    layoutParams = LinearLayout.LayoutParams(dp(this@MainActivity, 26), dp(this@MainActivity, 3)).apply {
+                        bottomMargin = dp(this@MainActivity, 6)
+                    }
                 }
+                val lbl = TextView(this).apply {
+                    tag = "lbl"
+                    text = shortLabel
+                    setTextColor(C_MUTED)
+                    textSize = 12f
+                    maxLines = 1
+                    typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
+                }
+                cell.addView(ind)
+                cell.addView(lbl)
+                navItems[key] = cell
+                dock.addView(cell)
             }
-            val lbl = TextView(this).apply {
-                tag = "lbl"
-                text = title
-                setTextColor(C_MUTED)
-                textSize = 12f
-                typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            }
-            item.addView(indicator)
-            item.addView(lbl)
-            navBtns[key] = item
-            bottomNav.addView(item)
+            bottomDockView = dock
+            mainCol.addView(hairline())
+            mainCol.addView(dock)
         }
-        dockWrap.addView(bottomNav)
-        root.addView(dockWrap)
-        return root
+
+        outer.addView(mainCol)
+        return outer
+    }
+
+    private fun hairline(): View = View(this).apply {
+        setBackgroundColor(C_BORDER)
+        layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 1))
     }
 
     private fun switchTab(key: String) {
+        if (fullscreenScreen && key != "screen") setScreenFullscreen(false)
         tabPanels.forEach { (k, v) ->
             if (k == key) {
                 if (v.visibility != View.VISIBLE) {
                     v.alpha = 0f
                     v.visibility = View.VISIBLE
-                    v.animate().alpha(1f).setDuration(160L).start()
+                    v.animate().alpha(1f).setDuration(140L).start()
                 }
             } else {
                 v.visibility = View.GONE
             }
         }
-        navBtns.forEach { (k, box) ->
+        lblTopSection.text = tabTitles[key] ?: "Continuum"
+        navItems.forEach { (k, v) ->
             val active = k == key
-            box.findViewWithTag<View>("ind")?.background = glassDrawable(if (active) C_CYAN else Color.TRANSPARENT, 0, 4f, this)
-            box.findViewWithTag<TextView>("lbl")?.setTextColor(if (active) C_CYAN else C_MUTED)
+            if (isTabletMode && v is TextView) {
+                v.setTextColor(if (active) C_TEXT else C_MUTED)
+                v.typeface = Typeface.create(Typeface.SANS_SERIF, if (active) Typeface.BOLD else Typeface.NORMAL)
+                v.background = if (active) roundedBg(C_CARD, C_CYAN, 10f, this) else null
+            } else if (v is LinearLayout) {
+                v.findViewWithTag<View>("ind")?.background = roundedBg(if (active) C_CYAN else Color.TRANSPARENT, 0, 3f, this)
+                v.findViewWithTag<TextView>("lbl")?.setTextColor(if (active) C_CYAN else C_MUTED)
+            }
         }
     }
 
-    private fun makeHoloBtn(label: String, primary: Boolean = false, onClick: (View) -> Unit): Button {
+    private fun makeBtn(label: String, primary: Boolean = false, heightDp: Int = 44, onClick: (View) -> Unit): Button {
         return Button(this).apply {
             text = label
             isAllCaps = false
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
             setTextColor(if (primary) Color.WHITE else C_TEXT)
-            textSize = 12.5f
+            textSize = 13f
             typeface = Typeface.create(Typeface.SANS_SERIF, if (primary) Typeface.BOLD else Typeface.NORMAL)
-            background = if (primary) holoGradientButton(this@MainActivity, 11f) else glassDrawable(C_GLASS_SUBTLE, C_BORDER, 11f, this@MainActivity)
-            minHeight = dpToPx(this@MainActivity, 44)
-            minimumHeight = dpToPx(this@MainActivity, 44)
-            setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 6), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 6))
+            background = if (primary) primaryGradientBg(this@MainActivity, 10f) else roundedBg(C_CARD_SUBTLE, C_BORDER_STRONG, 10f, this@MainActivity)
+            minWidth = 0
+            minimumWidth = 0
+            minHeight = dp(this@MainActivity, heightDp)
+            minimumHeight = dp(this@MainActivity, heightDp)
+            setPadding(dp(this@MainActivity, 14), dp(this@MainActivity, 8), dp(this@MainActivity, 14), dp(this@MainActivity, 8))
             setOnClickListener { onClick(it) }
         }
     }
@@ -1354,23 +1610,29 @@ class MainActivity : AppCompatActivity() {
             hint = hintText
             setText(initial)
             setTextColor(C_TEXT)
-            setHintTextColor(C_MUTED)
-            textSize = 13f
+            setHintTextColor(C_DIM)
+            textSize = 13.5f
             isSingleLine = true
-            background = glassDrawable(C_VOID, C_BORDER, 10f, this@MainActivity)
-            setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10))
+            background = roundedBg(C_BG, C_BORDER_STRONG, 10f, this@MainActivity)
+            setPadding(dp(this@MainActivity, 14), dp(this@MainActivity, 10), dp(this@MainActivity, 14), dp(this@MainActivity, 10))
         }
     }
 
-    // ==================== TAB 1: HOLOGRAPHIC SPATIAL MAP ====================
+    private fun makeCard(): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = roundedBg(C_CARD, C_BORDER, 14f, this@MainActivity)
+        setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 16), dp(this@MainActivity, 16), dp(this@MainActivity, 16))
+    }
+
+    // ==================== TAB 1: MAPA ESPACIAL ====================
     private fun buildMapTab(): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 6))
+            setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 14), dp(this@MainActivity, 16), dp(this@MainActivity, 14))
         }
         spatialMap = HolographicSpatialMapView(this).apply {
             selfId = deviceId
-            background = glassDrawable(C_VOID, C_BORDER, 16f, this@MainActivity)
+            background = roundedBg(C_BG, C_BORDER, 16f, this@MainActivity)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
             onSelect = { dev ->
                 selectedDeviceId = dev.id
@@ -1382,50 +1644,145 @@ class MainActivity : AppCompatActivity() {
         }
         box.addView(spatialMap)
 
-        val selCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassDrawable(C_GLASS, C_BORDER, 14f, this@MainActivity)
-            setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10))
+        val selCard = makeCard().apply {
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dpToPx(this@MainActivity, 10)
+                topMargin = dp(this@MainActivity, 12)
             }
         }
         lblMapSelected = TextView(this).apply {
-            text = "Radar ativo · Toque em um PC no mapa ou arraste os nós holográficos."
+            text = "Arraste os dispositivos no mapa para posicionar monitores e selecione o PC alvo."
             setTextColor(C_MUTED)
-            textSize = 12f
+            textSize = 12.5f
         }
         selCard.addView(lblMapSelected)
 
         val actRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dpToPx(this@MainActivity, 8)
+                topMargin = dp(this@MainActivity, 12)
             }
         }
-        val bCtrl = makeHoloBtn("Trackpad", true) { switchTab("remote") }
-        val bPing = makeHoloBtn("Localizar") { sendRemote(JSONObject().put("kind", "media").put("action", "ping")) }
-        val bFile = makeHoloBtn("Arquivo") { filePicker.launch(arrayOf("*/*")) }
-        listOf(bCtrl, bPing, bFile).forEachIndexed { i, b ->
-            actRow.addView(b, LinearLayout.LayoutParams(0, dpToPx(this, 44), 1f).apply { if (i > 0) leftMargin = dpToPx(this@MainActivity, 6) })
+        val bScreen = makeBtn("Segunda Tela", true) {
+            switchTab("screen")
+            requestPcScreenExtension()
+        }
+        val bCtrl = makeBtn("Mouse & Teclado") { switchTab("remote") }
+        val bFile = makeBtn("Enviar Arquivo") { filePicker.launch(arrayOf("*/*")) }
+        listOf(bScreen, bCtrl, bFile).forEachIndexed { idx, b ->
+            actRow.addView(b, LinearLayout.LayoutParams(0, dp(this, 44), 1f).apply {
+                if (idx > 0) leftMargin = dp(this@MainActivity, 8)
+            })
         }
         selCard.addView(actRow)
         box.addView(selCard)
         return box
     }
 
-    // ==================== TAB 2: HOLOGRAPHIC TRACKPAD ====================
+    // ==================== TAB 2: SEGUNDA TELA / EXTENSÃO DE MONITOR ====================
+    private fun buildScreenTab(): View {
+        val root = FrameLayout(this)
+        val col = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(this@MainActivity, 12), dp(this@MainActivity, 10), dp(this@MainActivity, 12), dp(this@MainActivity, 10))
+            layoutParams = FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+        }
+
+        val bar = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
+            background = roundedBg(C_CARD, C_BORDER, 12f, this@MainActivity)
+            setPadding(dp(this@MainActivity, 14), dp(this@MainActivity, 10), dp(this@MainActivity, 14), dp(this@MainActivity, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                bottomMargin = dp(this@MainActivity, 10)
+            }
+        }
+        lblScreenStatus = TextView(this).apply {
+            text = "Aguardando transmissão de tela do PC..."
+            setTextColor(C_TEXT)
+            textSize = 13f
+            maxLines = 1
+            ellipsize = TextUtils.TruncateAt.END
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                rightMargin = dp(this@MainActivity, 10)
+            }
+        }
+        val bReq = makeBtn("Pedir Tela", true, 40) { requestPcScreenExtension() }
+        val bFull = makeBtn("Tela Cheia", false, 40) { setScreenFullscreen(true) }
+        bar.addView(lblScreenStatus)
+        bar.addView(bReq, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(this, 40)))
+        bar.addView(bFull, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(this, 40)).apply {
+            leftMargin = dp(this@MainActivity, 8)
+        })
+        screenControlsBar = bar
+        col.addView(bar)
+
+        liveScreenView = LiveScreenView(
+            this,
+            onAbsMove = { nx, ny -> sendRemote(JSONObject().put("kind", "abs_move").put("nx", nx.toDouble()).put("ny", ny.toDouble())) },
+            onAbsClick = { nx, ny, btn -> sendRemote(JSONObject().put("kind", "abs_click").put("nx", nx.toDouble()).put("ny", ny.toDouble()).put("button", btn)) },
+            onScroll = { dy -> sendRemote(JSONObject().put("kind", "scroll").put("dx", 0).put("dy", dy.toDouble())) }
+        ).apply {
+            background = roundedBg(Color.parseColor("#04070E"), C_BORDER, 14f, this@MainActivity)
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
+        }
+        col.addView(liveScreenView)
+        root.addView(col)
+
+        // Subtle floating Exit Fullscreen button (only visible in fullscreen mode)
+        btnExitFullscreen = makeBtn("Sair Tela Cheia", false, 38) { setScreenFullscreen(false) }.apply {
+            alpha = 0.78f
+            visibility = View.GONE
+        }
+        root.addView(btnExitFullscreen, FrameLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(this, 38)).apply {
+            gravity = Gravity.TOP or Gravity.END
+            topMargin = dp(this@MainActivity, 12)
+            rightMargin = dp(this@MainActivity, 12)
+        })
+        return root
+    }
+
+    private fun setScreenFullscreen(enabled: Boolean) {
+        fullscreenScreen = enabled
+        sidebarView?.visibility = if (enabled) View.GONE else View.VISIBLE
+        bottomDockView?.visibility = if (enabled) View.GONE else View.VISIBLE
+        topBarView.visibility = if (enabled) View.GONE else View.VISIBLE
+        screenControlsBar.visibility = if (enabled) View.GONE else View.VISIBLE
+        btnExitFullscreen.visibility = if (enabled) View.VISIBLE else View.GONE
+        @Suppress("DEPRECATION")
+        window.decorView.systemUiVisibility = if (enabled) {
+            View.SYSTEM_UI_FLAG_FULLSCREEN or View.SYSTEM_UI_FLAG_HIDE_NAVIGATION or View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
+        } else {
+            View.SYSTEM_UI_FLAG_VISIBLE
+        }
+    }
+
+    private fun requestPcScreenExtension() {
+        val tgt = getTargetDevice()
+        if (tgt == null || tgt.id == deviceId) {
+            toast("Conecte-se primeiro a um computador Linux ou Windows.")
+            return
+        }
+        sendJson(JSONObject()
+            .put("type", "screen:request")
+            .put("sourceDeviceId", deviceId)
+            .put("sourceDeviceName", deviceName)
+            .put("targetDeviceId", tgt.id))
+        lblScreenStatus.text = "Solicitando extensão de tela para \${tgt.name}..."
+        toast("Solicitação de extensão enviada para \${tgt.name}!")
+    }
+
+    // ==================== TAB 3: MOUSE, TRACKPAD & TECLADO ====================
     private fun buildRemoteTab(): View {
         val box = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 6))
+            setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 12), dp(this@MainActivity, 16), dp(this@MainActivity, 12))
         }
         lblRemoteTarget = TextView(this).apply {
-            text = "Controlando: conecte-se a um PC automaticamente"
+            text = "Alvo: aguardando PC na rede local"
             setTextColor(C_CYAN)
-            textSize = 13f
+            textSize = 13.5f
             typeface = Typeface.create(Typeface.SANS_SERIF, Typeface.BOLD)
-            setPadding(0, 0, 0, dpToPx(this@MainActivity, 8))
+            setPadding(0, 0, 0, dp(this@MainActivity, 8))
         }
         box.addView(lblRemoteTarget)
 
@@ -1435,211 +1792,263 @@ class MainActivity : AppCompatActivity() {
             onClick = { btn -> sendRemote(JSONObject().put("kind", "click").put("button", btn)) },
             onScroll = { dy -> sendRemote(JSONObject().put("kind", "scroll").put("dx", 0).put("dy", dy.toDouble())) }
         ).apply {
-            background = glassDrawable(C_VOID, C_BORDER, 16f, this@MainActivity)
+            background = roundedBg(C_BG, C_BORDER, 16f, this@MainActivity)
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, 0, 1f)
         }
         box.addView(pad)
 
-        val r1 = LinearLayout(this).apply {
+        // Row 1: Mouse Buttons (Spacious 3-button row — NEVER squeezed!)
+        val mouseRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dpToPx(this@MainActivity, 8)
+                topMargin = dp(this@MainActivity, 10)
             }
         }
-        val row1Actions = listOf(
-            "Esq" to { sendRemote(JSONObject().put("kind", "click").put("button", "left")) },
-            "Dir" to { sendRemote(JSONObject().put("kind", "click").put("button", "right")) },
-            "Vol−" to { sendRemote(JSONObject().put("kind", "media").put("action", "vol_down")) },
-            "Vol+" to { sendRemote(JSONObject().put("kind", "media").put("action", "vol_up")) },
-            "Play" to { sendRemote(JSONObject().put("kind", "media").put("action", "play_pause")) }
+        val mouseBtns = listOf(
+            "Clique Esq." to { sendRemote(JSONObject().put("kind", "click").put("button", "left")) },
+            "Clique Meio" to { sendRemote(JSONObject().put("kind", "click").put("button", "middle")) },
+            "Clique Dir." to { sendRemote(JSONObject().put("kind", "click").put("button", "right")) }
         )
-        row1Actions.forEachIndexed { idx, (lbl, fn) ->
-            r1.addView(makeHoloBtn(lbl, false) { fn() }, LinearLayout.LayoutParams(0, dpToPx(this, 44), 1f).apply { if (idx > 0) leftMargin = dpToPx(this@MainActivity, 5) })
+        mouseBtns.forEachIndexed { idx, (lbl, fn) ->
+            mouseRow.addView(makeBtn(lbl, false, 44) { fn() }, LinearLayout.LayoutParams(0, dp(this, 44), 1f).apply {
+                if (idx > 0) leftMargin = dp(this@MainActivity, 8)
+            })
         }
-        box.addView(r1)
+        box.addView(mouseRow)
 
+        // Row 2: Live Keyboard Input
         val kbRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
             layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                topMargin = dpToPx(this@MainActivity, 8)
+                topMargin = dp(this@MainActivity, 10)
             }
         }
-        val txtInput = makeInput("Digitar no PC alvo...")
-        val btnSend = makeHoloBtn("Enviar", true) {
+        val txtInput = makeInput("Digitar texto no computador...")
+        val btnSend = makeBtn("Enviar", true, 44) {
             val t = txtInput.text.toString()
             if (t.isNotEmpty()) {
                 sendRemote(JSONObject().put("kind", "text").put("text", t))
                 txtInput.setText("")
             }
         }
-        val btnEnter = makeHoloBtn("Enter") { sendRemote(JSONObject().put("kind", "key").put("key", "Enter")) }
-        kbRow.addView(txtInput, LinearLayout.LayoutParams(0, dpToPx(this, 44), 1f))
-        kbRow.addView(btnSend, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpToPx(this, 44)).apply { leftMargin = dpToPx(this@MainActivity, 6) })
-        kbRow.addView(btnEnter, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpToPx(this, 44)).apply { leftMargin = dpToPx(this@MainActivity, 6) })
+        val btnEnter = makeBtn("Enter", false, 44) { sendRemote(JSONObject().put("kind", "key").put("key", "Enter")) }
+        kbRow.addView(txtInput, LinearLayout.LayoutParams(0, dp(this, 44), 1f))
+        kbRow.addView(btnSend, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(this, 44)).apply { leftMargin = dp(this@MainActivity, 8) })
+        kbRow.addView(btnEnter, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(this, 44)).apply { leftMargin = dp(this@MainActivity, 8) })
         box.addView(kbRow)
+
+        // Row 3: Keyboard Shortcuts + Media (4 clean buttons, spaced evenly)
+        val shortcutRow = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(this@MainActivity, 10)
+            }
+        }
+        val shortcuts = listOf(
+            "Vol −" to { sendRemote(JSONObject().put("kind", "media").put("action", "vol_down")) },
+            "Vol +" to { sendRemote(JSONObject().put("kind", "media").put("action", "vol_up")) },
+            "Play/Pause" to { sendRemote(JSONObject().put("kind", "media").put("action", "play_pause")) },
+            "Alt+Tab" to { sendRemote(JSONObject().put("kind", "key").put("key", "Alt+Tab")) }
+        )
+        shortcuts.forEachIndexed { idx, (lbl, fn) ->
+            shortcutRow.addView(makeBtn(lbl, false, 42) { fn() }, LinearLayout.LayoutParams(0, dp(this, 42), 1f).apply {
+                if (idx > 0) leftMargin = dp(this@MainActivity, 8)
+            })
+        }
+        box.addView(shortcutRow)
         return box
     }
 
-    // ==================== TAB 3: FILES & CLIPBOARD ====================
+    // ==================== TAB 4: CLIPBOARD AUTOMÁTICO & ARQUIVOS ====================
     private fun buildTransferTab(): View {
         val scroll = ScrollView(this)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 16))
+            setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 14), dp(this@MainActivity, 16), dp(this@MainActivity, 20))
         }
 
-        val fCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassDrawable(C_GLASS, C_BORDER, 14f, this@MainActivity)
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12))
+        // Card 1: Universal Auto-Sync Clipboard
+        val cCard = makeCard()
+        val cHeader = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER_VERTICAL
         }
-        fCard.addView(TextView(this).apply { text = "Transferência Direta LAN"; setTextColor(C_TEXT); textSize = 15f; typeface = Typeface.DEFAULT_BOLD })
-        fCard.addView(makeHoloBtn("Escolher e Enviar Arquivo", true) { filePicker.launch(arrayOf("*/*")) }.apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 46)).apply { topMargin = dpToPx(this@MainActivity, 8) }
+        val cTitleCol = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+        }
+        cTitleCol.addView(TextView(this).apply { text = "Área de Transferência Universal"; setTextColor(C_TEXT); textSize = 15.5f; typeface = Typeface.DEFAULT_BOLD })
+        cTitleCol.addView(TextView(this).apply { text = "Sincroniza automaticamente tudo o que você copia entre PC e Tablet."; setTextColor(C_MUTED); textSize = 12f })
+        val swAutoClip = Switch(this).apply {
+            isChecked = autoClipboardSync
+            text = "Auto"
+            setTextColor(C_CYAN)
+            setOnCheckedChangeListener { _, checked ->
+                autoClipboardSync = checked
+                prefs.edit().putBoolean("autoClipboardSync", checked).apply()
+                toast(if (checked) "Sincronização automática de clipboard ativada!" else "Sincronização automática pausada.")
+            }
+        }
+        cHeader.addView(cTitleCol)
+        cHeader.addView(swAutoClip)
+        cCard.addView(cHeader)
+
+        val editClip = makeInput("Cole ou digite um texto para enviar à malha...")
+        cCard.addView(editClip, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this, 46)).apply {
+            topMargin = dp(this@MainActivity, 12)
+        })
+
+        val cBtns = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(this@MainActivity, 10)
+            }
+        }
+        val bPush = makeBtn("Enviar Texto", true, 44) {
+            val t = editClip.text.toString().trim()
+            if (t.isNotEmpty()) { pushClipboard(t); editClip.setText("") }
+        }
+        val bGrab = makeBtn("Enviar Meu Clipboard", false, 44) {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val clip = cm.primaryClip
+            val txt = if (clip != null && clip.itemCount > 0) clip.getItemAt(0)?.coerceToText(this)?.toString() else null
+            if (!txt.isNullOrBlank()) pushClipboard(txt) else toast("Clipboard vazio.")
+        }
+        cBtns.addView(bPush, LinearLayout.LayoutParams(0, dp(this, 44), 1f))
+        cBtns.addView(bGrab, LinearLayout.LayoutParams(0, dp(this, 44), 1f).apply { leftMargin = dp(this@MainActivity, 10) })
+        cCard.addView(cBtns)
+
+        clipListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(this@MainActivity, 12), 0, 0) }
+        cCard.addView(clipListContainer)
+        col.addView(cCard)
+
+        // Card 2: Direct LAN File Transfer
+        val fCard = makeCard().apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(this@MainActivity, 14)
+            }
+        }
+        fCard.addView(TextView(this).apply { text = "Transferência Direta de Arquivos"; setTextColor(C_TEXT); textSize = 15.5f; typeface = Typeface.DEFAULT_BOLD })
+        fCard.addView(makeBtn("Escolher e Enviar Arquivo via Wi-Fi", true, 46) { filePicker.launch(arrayOf("*/*")) }.apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 46)).apply { topMargin = dp(this@MainActivity, 12) }
         })
         lblFileStatus = TextView(this).apply {
-            text = "Pronto para envio em velocidade local Wi-Fi"
+            text = "Pronto para envio direto na rede local"
             setTextColor(C_MUTED)
-            textSize = 12f
-            setPadding(0, dpToPx(this@MainActivity, 8), 0, dpToPx(this@MainActivity, 4))
+            textSize = 12.5f
+            setPadding(0, dp(this@MainActivity, 10), 0, dp(this@MainActivity, 6))
         }
         fCard.addView(lblFileStatus)
         fileProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
             max = 100
             progress = 0
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 10))
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 10))
         }
         fCard.addView(fileProgress)
         fileListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         fCard.addView(fileListContainer)
         col.addView(fCard)
 
-        val cCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassDrawable(C_GLASS, C_BORDER, 14f, this@MainActivity)
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpToPx(this@MainActivity, 12) }
-        }
-        cCard.addView(TextView(this).apply { text = "Área de Transferência Universal"; setTextColor(C_TEXT); textSize = 15f; typeface = Typeface.DEFAULT_BOLD })
-        val cRow = LinearLayout(this).apply {
-            orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpToPx(this@MainActivity, 8) }
-        }
-        val editClip = makeInput("Texto para sincronizar...")
-        val bPush = makeHoloBtn("Enviar", true) {
-            val t = editClip.text.toString().trim()
-            if (t.isNotEmpty()) { pushClipboard(t); editClip.setText("") }
-        }
-        val bGrab = makeHoloBtn("Colar") {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val clip = cm.primaryClip
-            val txt = if (clip != null && clip.itemCount > 0) clip.getItemAt(0)?.coerceToText(this)?.toString() else null
-            if (!txt.isNullOrBlank()) pushClipboard(txt) else toast("Clipboard vazio.")
-        }
-        cRow.addView(editClip, LinearLayout.LayoutParams(0, dpToPx(this, 44), 1f))
-        cRow.addView(bPush, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpToPx(this, 44)).apply { leftMargin = dpToPx(this@MainActivity, 6) })
-        cRow.addView(bGrab, LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dpToPx(this, 44)).apply { leftMargin = dpToPx(this@MainActivity, 6) })
-        cCard.addView(cRow)
-
-        clipListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dpToPx(this@MainActivity, 8), 0, 0) }
-        cCard.addView(clipListContainer)
-        col.addView(cCard)
-
         scroll.addView(col)
         return scroll
     }
 
-    // ==================== TAB 4: SMART AUTO-DISCOVERY & DIRECT LAN CONNECT ====================
+    // ==================== TAB 5: REDE LAN & SISTEMA ====================
     private fun buildNetworkTab(): View {
         val scroll = ScrollView(this)
         val col = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 16))
+            setPadding(dp(this@MainActivity, 16), dp(this@MainActivity, 14), dp(this@MainActivity, 16), dp(this@MainActivity, 20))
         }
 
         val myIp = getLocalLanIp()
-        val lanCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassDrawable(C_GLASS, C_BORDER, 14f, this@MainActivity)
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12))
-        }
-        lanCard.addView(TextView(this).apply { text = "Radar Wi-Fi Automático (P2P Direto)"; setTextColor(C_CYAN); textSize = 15f; typeface = Typeface.DEFAULT_BOLD })
+        val lanCard = makeCard()
+        lanCard.addView(TextView(this).apply { text = "Dispositivos na Rede Wi-Fi"; setTextColor(C_TEXT); textSize = 15.5f; typeface = Typeface.DEFAULT_BOLD })
         lblScanBanner = TextView(this).apply {
-            text = "IP deste Android: \$myIp:\$LAN_WS_PORT · Varredura híbrida (UDP + TCP /24)"
-            setTextColor(C_MUTED)
-            textSize = 11.5f
+            text = "Este dispositivo: \$myIp:\$LAN_WS_PORT · Hub LAN ativo"
+            setTextColor(C_CYAN)
+            textSize = 12f
             typeface = Typeface.MONOSPACE
-            setPadding(0, dpToPx(this@MainActivity, 4), 0, dpToPx(this@MainActivity, 8))
+            setPadding(0, dp(this@MainActivity, 4), 0, dp(this@MainActivity, 12))
         }
         lanCard.addView(lblScanBanner)
 
-        lanCard.addView(makeHoloBtn("Escanear Todos os PCs no Wi-Fi Agora", true) {
-            runFastLanSubnetScan(autoConnect = true)
+        lanCard.addView(makeBtn("Escanear Dispositivos no Wi-Fi", true, 46) {
+            runFastLanSubnetScan(autoConnect = !connected || activeWsUrl.startsWith("ws://127.0.0.1"))
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 46)).apply { bottomMargin = dpToPx(this@MainActivity, 8) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 46)).apply { bottomMargin = dp(this@MainActivity, 12) }
         })
 
         lanPeersContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         lanCard.addView(lanPeersContainer)
 
         lanCard.addView(TextView(this).apply {
-            text = "Conexão Direta por IP (aceita IP, .final, http:// ou ws://)"
+            text = "Conexão Manual (aceita IP, .final, http:// ou ws://)"
             setTextColor(C_MUTED)
-            textSize = 12f
-            setPadding(0, dpToPx(this@MainActivity, 12), 0, dpToPx(this@MainActivity, 6))
+            textSize = 12.5f
+            setPadding(0, dp(this@MainActivity, 14), 0, dp(this@MainActivity, 8))
         })
+
         editRoom = makeInput("Código da Malha (ex: MESH01)", roomCode).apply {
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_CHARACTERS
         }
-        lanCard.addView(editRoom, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this, 44)))
+        lanCard.addView(editRoom, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this, 46)))
 
-        val ipPrefixHint = myIp.split('.').takeIf { it.size == 4 && !myIp.startsWith("127.") }?.let { "ex: \${it[0]}.\${it[1]}.\${it[2]}.42 ou só .42" } ?: "ex: 192.168.1.42:45891"
+        val ipPrefixHint = myIp.split('.').takeIf { it.size == 4 && !myIp.startsWith("127.") }?.let { "ex: \${it[0]}.\${it[1]}.\${it[2]}.42 ou .42" } ?: "ex: 192.168.1.42:45891"
         editManualIp = makeInput(ipPrefixHint, manualHostPort)
-        lanCard.addView(editManualIp, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this, 44)).apply { topMargin = dpToPx(this@MainActivity, 8) })
+        lanCard.addView(editManualIp, LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this, 46)).apply { topMargin = dp(this@MainActivity, 10) })
 
         val btnRow = LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpToPx(this@MainActivity, 8) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dp(this@MainActivity, 10) }
         }
-        val bConn = makeHoloBtn("Conectar Direto", true) {
+        val bConn = makeBtn("Conectar Direto", true, 46) {
             roomCode = editRoom.text.toString().uppercase().replace(Regex("[^A-Z0-9]"), "").take(12).ifEmpty { BuildConfig.DEFAULT_ROOM_CODE }
-            lblTopRoom.text = "  ·  \$roomCode"
+            lblSidebarRoom.text = "Malha: \$roomCode"
             val raw = editManualIp.text.toString().trim()
-            if (raw.isNotEmpty()) {
-                connectDirectInput(raw)
-            } else {
-                runFastLanSubnetScan(autoConnect = true)
-            }
+            if (raw.isNotEmpty()) connectDirectInput(raw) else runFastLanSubnetScan(autoConnect = true)
         }
-        val bAuto = makeHoloBtn("Auto Wi-Fi") {
+        val bAuto = makeBtn("Modo Automático", false, 46) {
             manualHostPort = ""
             editManualIp.setText("")
             prefs.edit().putString("manualHostPort", "").apply()
+            connectToEndpoint("ws://127.0.0.1:\$LAN_WS_PORT/ws", "Hub Local (\${getLocalLanIp()})", force = true)
             runFastLanSubnetScan(autoConnect = true)
         }
-        btnRow.addView(bConn, LinearLayout.LayoutParams(0, dpToPx(this, 46), 1f))
-        btnRow.addView(bAuto, LinearLayout.LayoutParams(0, dpToPx(this, 46), 1f).apply { leftMargin = dpToPx(this@MainActivity, 8) })
+        btnRow.addView(bConn, LinearLayout.LayoutParams(0, dp(this, 46), 1f))
+        btnRow.addView(bAuto, LinearLayout.LayoutParams(0, dp(this, 46), 1f).apply { leftMargin = dp(this@MainActivity, 10) })
         lanCard.addView(btnRow)
         col.addView(lanCard)
 
-        val aCard = LinearLayout(this).apply {
-            orientation = LinearLayout.VERTICAL
-            background = glassDrawable(C_GLASS, C_BORDER, 14f, this@MainActivity)
-            setPadding(dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 14), dpToPx(this@MainActivity, 12))
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { topMargin = dpToPx(this@MainActivity, 12) }
+        // Live Telemetry Card
+        val telCard = makeCard().apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(this@MainActivity, 14)
+            }
         }
-        aCard.addView(TextView(this).apply { text = "Alertas da Malha"; setTextColor(C_TEXT); textSize = 15f; typeface = Typeface.DEFAULT_BOLD })
-        aCard.addView(makeHoloBtn("Enviar Alerta de Teste") {
+        telCard.addView(TextView(this).apply { text = "Telemetria dos Dispositivos Conectados"; setTextColor(C_TEXT); textSize = 15.5f; typeface = Typeface.DEFAULT_BOLD })
+        telemetryContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(this@MainActivity, 10), 0, 0) }
+        telCard.addView(telemetryContainer)
+        col.addView(telCard)
+
+        // Alerts Card
+        val aCard = makeCard().apply {
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(this@MainActivity, 14)
+            }
+        }
+        aCard.addView(TextView(this).apply { text = "Alertas da Malha"; setTextColor(C_TEXT); textSize = 15.5f; typeface = Typeface.DEFAULT_BOLD })
+        aCard.addView(makeBtn("Enviar Alerta de Teste", false, 44) {
             sendJson(JSONObject()
                 .put("type", "notification:push")
                 .put("title", "Alerta de \$deviceName")
-                .put("body", "Android conectado diretamente na rede local.")
+                .put("body", "Conectado diretamente na rede local.")
                 .put("sourceDeviceId", deviceId)
                 .put("sourceDeviceName", deviceName))
         }.apply {
-            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dpToPx(this@MainActivity, 44)).apply { topMargin = dpToPx(this@MainActivity, 8) }
+            layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(this@MainActivity, 44)).apply { topMargin = dp(this@MainActivity, 10) }
         })
-        notifListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dpToPx(this@MainActivity, 8), 0, 0) }
+        notifListContainer = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(0, dp(this@MainActivity, 10), 0, 0) }
         aCard.addView(notifListContainer)
         col.addView(aCard)
 
@@ -1648,17 +2057,41 @@ class MainActivity : AppCompatActivity() {
         return scroll
     }
 
-    // ==================== 3-LAYER AUTOMATIC DISCOVERY ====================
+    // ==================== AUTO-SYNC OS CLIPBOARD ====================
+    private fun setupAutoClipboardListener() {
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            val listener = ClipboardManager.OnPrimaryClipChangedListener {
+                if (!autoClipboardSync || !connected) return@OnPrimaryClipChangedListener
+                val clip = cm.primaryClip
+                if (clip != null && clip.itemCount > 0) {
+                    val txt = clip.getItemAt(0)?.coerceToText(this)?.toString()?.trim() ?: ""
+                    if (txt.isNotEmpty() && txt != lastSyncedClip) {
+                        lastSyncedClip = txt
+                        sendJson(JSONObject()
+                            .put("type", "clipboard:push")
+                            .put("content", txt)
+                            .put("sourceDeviceId", deviceId)
+                            .put("sourceDeviceName", deviceName)
+                            .put("auto", true))
+                    }
+                }
+            }
+            cm.addPrimaryClipChangedListener(listener)
+            clipListener = listener
+        } catch (_: Exception) { }
+    }
+
+    // ==================== 3-LAYER DISCOVERY (ZERO RECONNECT LOOPS!) ====================
     private fun startUdpDiscoveryAndResponder() {
         try {
             val wm = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
-            multicastLock = wm?.createMulticastLock("continuum_lan_v4")?.apply {
+            multicastLock = wm?.createMulticastLock("continuum_lan_v5")?.apply {
                 setReferenceCounted(true)
                 acquire()
             }
         } catch (_: Exception) { }
 
-        // Listener + Probe Responder + Periodic Active Probe Sender
         Thread {
             try {
                 val sock = DatagramSocket(null).apply {
@@ -1669,31 +2102,30 @@ class MainActivity : AppCompatActivity() {
                 }
                 discoverySocket = sock
 
-                // Periodic active probe + self-beacon thread
                 Thread {
-                    val myIp = getLocalLanIp()
-                    val subnetBcast = myIp.split('.').takeIf { it.size == 4 && !myIp.startsWith("127.") }?.let { "\${it[0]}.\${it[1]}.\${it[2]}.255" }
                     while (!destroyed) {
                         try {
+                            val myIp = getLocalLanIp()
+                            val subnetBcast = myIp.split('.').takeIf { it.size == 4 && !myIp.startsWith("127.") }?.let { "\${it[0]}.\${it[1]}.\${it[2]}.255" }
                             val probe = JSONObject()
-                                .put("proto", PROTO_V4)
+                                .put("proto", PROTO_V5)
                                 .put("type", "probe")
                                 .put("roomCode", roomCode)
                                 .put("hubId", deviceId)
                                 .put("hubName", deviceName)
                                 .put("os", "android")
-                                .put("ip", getLocalLanIp())
+                                .put("ip", myIp)
                                 .put("wsPort", LAN_WS_PORT)
                                 .put("startedAt", localHub.startedAt)
+                                .put("peers", localHub.peerCount(roomCode))
+                                .put("remotePeers", localHub.remotePeerCount())
                                 .toString()
                                 .toByteArray(Charsets.UTF_8)
                             sock.send(DatagramPacket(probe, probe.size, InetAddress.getByName("255.255.255.255"), LAN_UDP_PORT))
-                            if (subnetBcast != null) {
-                                sock.send(DatagramPacket(probe, probe.size, InetAddress.getByName(subnetBcast), LAN_UDP_PORT))
-                            }
+                            if (subnetBcast != null) sock.send(DatagramPacket(probe, probe.size, InetAddress.getByName(subnetBcast), LAN_UDP_PORT))
                             sock.send(DatagramPacket(probe, probe.size, InetAddress.getByName(MULTICAST_ADDR), LAN_UDP_PORT))
                         } catch (_: Exception) { }
-                        Thread.sleep(2500)
+                        Thread.sleep(2600)
                     }
                 }.apply { isDaemon = true; start() }
 
@@ -1705,14 +2137,13 @@ class MainActivity : AppCompatActivity() {
                         val str = String(packet.data, 0, packet.length, Charsets.UTF_8)
                         val json = JSONObject(str)
                         val proto = json.optString("proto")
-                        if (proto != PROTO_V4 && proto != PROTO_V3) continue
+                        if (proto != PROTO_V5 && proto != PROTO_V4 && proto != PROTO_V3) continue
                         val hubId = json.optString("hubId")
                         if (hubId.isBlank() || hubId == deviceId) continue
 
-                        // If another device probed us, reply immediately via direct unicast!
                         if (json.optString("type") == "probe" && localHub.active) {
                             val reply = JSONObject()
-                                .put("proto", PROTO_V4)
+                                .put("proto", PROTO_V5)
                                 .put("type", "beacon")
                                 .put("roomCode", roomCode)
                                 .put("hubId", deviceId)
@@ -1721,6 +2152,8 @@ class MainActivity : AppCompatActivity() {
                                 .put("ip", getLocalLanIp())
                                 .put("wsPort", LAN_WS_PORT)
                                 .put("startedAt", localHub.startedAt)
+                                .put("peers", localHub.peerCount(roomCode))
+                                .put("remotePeers", localHub.remotePeerCount())
                                 .toString()
                                 .toByteArray(Charsets.UTF_8)
                             try { sock.send(DatagramPacket(reply, reply.size, packet.address, packet.port)) } catch (_: Exception) { }
@@ -1737,6 +2170,7 @@ class MainActivity : AppCompatActivity() {
                                 wsPort = json.optInt("wsPort", LAN_WS_PORT),
                                 roomCode = json.optString("roomCode", roomCode),
                                 via = "UDP Auto",
+                                remotePeers = json.optInt("remotePeers", 0),
                                 lastSeenMs = System.currentTimeMillis()
                             ),
                             allowAutoConnect = true
@@ -1747,17 +2181,12 @@ class MainActivity : AppCompatActivity() {
         }.apply { isDaemon = true; start() }
     }
 
-    /**
-     * FAST PARALLEL /24 TCP LAN SCANNER (Zero UDP dependency!)
-     * Probes 192.168.x.1..254 on port 45891 in ~1.4 seconds using 32 concurrent workers.
-     * Works even on Wi-Fi routers that completely block UDP broadcast / multicast!
-     */
     private fun runFastLanSubnetScan(autoConnect: Boolean) {
         if (scanningLan) return
         val myIp = getLocalLanIp()
         val parts = myIp.split('.')
         if (parts.size != 4 || myIp.startsWith("127.")) {
-            toast("Conecte-se ao Wi-Fi local para escanear PCs.")
+            mainHandler.post { toast("Conecte-se ao Wi-Fi local para escanear PCs.") }
             return
         }
         val prefix = "\${parts[0]}.\${parts[1]}.\${parts[2]}"
@@ -1765,27 +2194,19 @@ class MainActivity : AppCompatActivity() {
         mainHandler.post {
             spatialMap.scanning = true
             spatialMap.scanProgress = 0
-            lblTopStatus.text = "◌ Escaneando \$prefix.x (0%)..."
-            lblTopStatus.setTextColor(C_CYAN)
             lblScanBanner.text = "Escaneando \$prefix.1..254 na porta \$LAN_WS_PORT..."
         }
 
         Thread {
             val pool = Executors.newFixedThreadPool(32)
             val done = AtomicInteger(0)
-            val foundAny = AtomicInteger(0)
-
             for (hostNum in 1..254) {
                 val targetIp = "\$prefix.\$hostNum"
-                if (targetIp == myIp) {
-                    done.incrementAndGet()
-                    continue
-                }
+                if (targetIp == myIp) { done.incrementAndGet(); continue }
                 pool.execute {
                     try {
                         val info = probeContinuumHttpInfo(targetIp, LAN_WS_PORT, 260)
                         if (info != null) {
-                            foundAny.incrementAndGet()
                             val hub = DiscoveredLanHub(
                                 hubId = info.optString("hubId", "lan-\$targetIp"),
                                 hubName = info.optString("hubName", info.optString("hub", targetIp)),
@@ -1794,6 +2215,7 @@ class MainActivity : AppCompatActivity() {
                                 wsPort = info.optInt("wsPort", LAN_WS_PORT),
                                 roomCode = info.optString("roomCode", roomCode),
                                 via = "TCP Radar",
+                                remotePeers = info.optInt("remotePeers", 0),
                                 lastSeenMs = System.currentTimeMillis()
                             )
                             registerDiscoveredHub(hub, allowAutoConnect = autoConnect)
@@ -1801,37 +2223,20 @@ class MainActivity : AppCompatActivity() {
                     } catch (_: Exception) {
                     } finally {
                         val c = done.incrementAndGet()
-                        if (c % 16 == 0 || c == 254) {
+                        if (c % 20 == 0 || c == 254) {
                             val pct = (c * 100) / 254
-                            mainHandler.post {
-                                spatialMap.scanProgress = pct
-                                if (!connected) {
-                                    lblTopStatus.text = "◌ Escaneando \$prefix.x (\$pct%)..."
-                                }
-                            }
+                            mainHandler.post { spatialMap.scanProgress = pct }
                         }
                     }
                 }
             }
             pool.shutdown()
             try { pool.awaitTermination(8, TimeUnit.SECONDS) } catch (_: Exception) { }
-
             scanningLan = false
             mainHandler.post {
                 spatialMap.scanning = false
-                lblScanBanner.text = "IP deste Android: \$myIp:\$LAN_WS_PORT · \${discoveredHubs.size} PC(s) detectado(s)"
+                lblScanBanner.text = "Este dispositivo: \$myIp:\$LAN_WS_PORT · \${discoveredHubs.size} peer(s) detectado(s)"
                 refreshLanPeersUi()
-                if (!connected) {
-                    val best = discoveredHubs.values.firstOrNull { it.roomCode == roomCode } ?: discoveredHubs.values.firstOrNull()
-                    if (best != null) {
-                        connectToEndpoint("ws://\${best.ip}:\${best.wsPort}/ws", "\${best.hubName} (\${best.ip})", force = true)
-                    } else {
-                        // Connect to our own embedded hub so Android stays online & ready for PC outbound connection!
-                        lblTopStatus.text = "● Aguardando PC · IP \$myIp:\$LAN_WS_PORT"
-                        lblTopStatus.setTextColor(C_AMBER)
-                        connectToEndpoint("ws://127.0.0.1:\$LAN_WS_PORT/ws", "Hub Android (\$myIp)", force = true)
-                    }
-                }
             }
         }.apply { isDaemon = true; start() }
     }
@@ -1860,17 +2265,27 @@ class MainActivity : AppCompatActivity() {
     private fun registerDiscoveredHub(hub: DiscoveredLanHub, allowAutoConnect: Boolean) {
         if (hub.hubId == deviceId) return
         discoveredHubs[hub.hubId] = hub
-        mainHandler.post {
-            refreshLanPeersUi()
-            val onSelfFallback = activeWsUrl.startsWith("ws://127.0.0.1")
-            if (allowAutoConnect && manualHostPort.isBlank() && (!connected || onSelfFallback)) {
-                if (hub.roomCode == roomCode || discoveredHubs.size == 1) {
-                    roomCode = hub.roomCode
-                    lblTopRoom.text = "  ·  \$roomCode"
-                    editRoom.setText(roomCode)
-                    connectToEndpoint("ws://\${hub.ip}:\${hub.wsPort}/ws", "\${hub.hubName} (\${hub.ip})", force = true)
+        mainHandler.post { refreshLanPeersUi() }
+
+        // RULE: NEVER abandon a working mesh! If localHub already has a PC connected OR we already have >1 device, STAY PUT!
+        if (!allowAutoConnect || manualHostPort.isNotBlank()) return
+        if (localHub.hasRemotePeers() || (connected && devices.size > 1)) return
+
+        val onSelfOnly = activeWsUrl.startsWith("ws://127.0.0.1")
+        if (!connected || onSelfOnly) {
+            // Pre-probe via TCP BEFORE switching so we NEVER jump into a firewalled PC!
+            Thread {
+                val reachable = probeContinuumHttpInfo(hub.ip, hub.wsPort, 650)
+                if (reachable != null) {
+                    mainHandler.post {
+                        if (localHub.hasRemotePeers() || (connected && devices.size > 1)) return@post
+                        roomCode = hub.roomCode
+                        lblSidebarRoom.text = "Malha: \$roomCode"
+                        editRoom.setText(roomCode)
+                        connectToEndpoint("ws://\${hub.ip}:\${hub.wsPort}/ws", "\${hub.hubName} (\${hub.ip})", force = false)
+                    }
                 }
-            }
+            }.apply { isDaemon = true; start() }
         }
     }
 
@@ -1886,25 +2301,25 @@ class MainActivity : AppCompatActivity() {
         editManualIp.setText(normalizedDisplay)
         prefs.edit().putString("roomCode", roomCode).putString("manualHostPort", normalizedDisplay).apply()
 
-        lblTopStatus.text = "◌ Verificando \$normalizedDisplay..."
+        lblTopStatus.text = "Verificando \$normalizedDisplay..."
         lblTopStatus.setTextColor(C_CYAN)
 
         Thread {
-            val info = probeContinuumHttpInfo(host, port, 1600)
+            val info = probeContinuumHttpInfo(host, port, 1500)
             mainHandler.post {
                 if (info != null) {
                     val remoteName = info.optString("hubName", info.optString("hub", host))
                     val remoteRoom = info.optString("roomCode", "")
                     if (remoteRoom.isNotBlank()) {
                         roomCode = remoteRoom
-                        lblTopRoom.text = "  ·  \$roomCode"
+                        lblSidebarRoom.text = "Malha: \$roomCode"
                         editRoom.setText(roomCode)
                     }
-                    toast("Conectado a \$remoteName (\$host)!")
                     connectToEndpoint("ws://\$host:\$port/ws", "\$remoteName (\$host)", force = true)
                 } else {
-                    toast("Sem resposta em \$normalizedDisplay — tentando WebSocket direto. Verifique firewall na porta \$port.")
-                    connectToEndpoint("ws://\$host:\$port/ws", "LAN · \$host", force = true)
+                    toast("PC não respondeu na porta \$port (verifique o firewall). Mantendo Hub local ativo para o PC conectar aqui!")
+                    manualHostPort = ""
+                    connectToEndpoint("ws://127.0.0.1:\$LAN_WS_PORT/ws", "Hub Local (\${getLocalLanIp()})", force = true)
                 }
             }
         }.apply { isDaemon = true; start() }
@@ -1912,77 +2327,98 @@ class MainActivity : AppCompatActivity() {
 
     private fun refreshLanPeersUi() {
         val now = System.currentTimeMillis()
-        discoveredHubs.entries.removeIf { now - it.value.lastSeenMs > 25000L }
+        discoveredHubs.entries.removeIf { now - it.value.lastSeenMs > 28000L }
         lanPeersContainer.removeAllViews()
         val list = discoveredHubs.values.sortedBy { it.hubName }
         if (list.isEmpty()) {
             lanPeersContainer.addView(TextView(this).apply {
-                text = "Nenhum PC detectado ainda. Abra o Continuum v4 no Linux ou Windows na mesma rede Wi-Fi e toque em Escanear."
+                text = "Nenhum computador encontrado ainda. Abra o Continuum no Linux ou Windows na mesma rede Wi-Fi."
                 setTextColor(C_MUTED)
-                textSize = 12f
-                setPadding(0, dpToPx(this@MainActivity, 6), 0, dpToPx(this@MainActivity, 6))
+                textSize = 12.5f
+                setPadding(0, dp(this@MainActivity, 4), 0, dp(this@MainActivity, 4))
             })
             return
         }
         for (h in list) {
+            val isAlreadyJoined = devices.any { it.lanIp == h.ip || it.id == h.hubId } || activeWsUrl == "ws://\${h.ip}:\${h.wsPort}/ws"
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = glassDrawable(C_GLASS_SUBTLE, C_BORDER, 12f, this@MainActivity)
-                setPadding(dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 12), dpToPx(this@MainActivity, 10))
+                background = roundedBg(C_CARD_SUBTLE, if (isAlreadyJoined) C_GREEN else C_BORDER, 12f, this@MainActivity)
+                setPadding(dp(this@MainActivity, 14), dp(this@MainActivity, 12), dp(this@MainActivity, 14), dp(this@MainActivity, 12))
                 layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply {
-                    bottomMargin = dpToPx(this@MainActivity, 6)
+                    bottomMargin = dp(this@MainActivity, 8)
                 }
             }
             val info = LinearLayout(this).apply {
                 orientation = LinearLayout.VERTICAL
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply {
+                    rightMargin = dp(this@MainActivity, 10)
+                }
             }
-            info.addView(TextView(this).apply { text = "\${h.hubName} (\${h.os.uppercase()})"; setTextColor(C_TEXT); textSize = 13.5f; typeface = Typeface.DEFAULT_BOLD })
-            info.addView(TextView(this).apply { text = "\${h.ip}:\${h.wsPort} · \${h.via} · \${h.roomCode}"; setTextColor(C_CYAN); textSize = 11f; typeface = Typeface.MONOSPACE })
+            info.addView(TextView(this).apply { text = "\${h.hubName} (\${h.os.uppercase()})"; setTextColor(C_TEXT); textSize = 14f; typeface = Typeface.DEFAULT_BOLD })
+            info.addView(TextView(this).apply { text = "\${h.ip}:\${h.wsPort} · \${h.via} · \${h.roomCode}"; setTextColor(C_CYAN); textSize = 11.5f; typeface = Typeface.MONOSPACE })
             row.addView(info)
-            row.addView(makeHoloBtn("Conectar", true) {
-                roomCode = h.roomCode
-                lblTopRoom.text = "  ·  \$roomCode"
-                editRoom.setText(roomCode)
-                connectToEndpoint("ws://\${h.ip}:\${h.wsPort}/ws", "\${h.hubName} (\${h.ip})", force = true)
-            })
+
+            if (isAlreadyJoined && connected) {
+                row.addView(TextView(this).apply {
+                    text = "Conectado"
+                    setTextColor(C_GREEN)
+                    textSize = 12.5f
+                    typeface = Typeface.DEFAULT_BOLD
+                    setPadding(dp(this@MainActivity, 10), dp(this@MainActivity, 6), dp(this@MainActivity, 6), dp(this@MainActivity, 6))
+                })
+            } else {
+                row.addView(makeBtn("Conectar", true, 40) {
+                    connectDirectInput("\${h.ip}:\${h.wsPort}")
+                })
+            }
             lanPeersContainer.addView(row)
         }
     }
 
-    // ==================== DIRECT LAN WEBSOCKET CLIENT ====================
+    // ==================== STABLE WEBSOCKET CLIENT (ZERO RECONNECT LOOPS!) ====================
     private fun connectToEndpoint(url: String, label: String, force: Boolean = false) {
         if (destroyed) return
         if (!force && connected && activeWsUrl == url) return
-        try { ws?.close(1000, "switch") } catch (_: Exception) { }
+
+        val myGen = connGen.incrementAndGet()
+        val prevWs = ws
         ws = null
+        try { prevWs?.close(1000, "switch") } catch (_: Exception) { }
+
         activeWsUrl = url
         activeHubLabel = label
         connected = false
+        consecutiveFailures = 0
 
         mainHandler.post {
-            lblTopStatus.text = "◌ Conectando a \$label..."
+            lblTopStatus.text = "Conectando a \$label..."
             lblTopStatus.setTextColor(C_CYAN)
         }
 
         val req = try {
             Request.Builder().url(url).build()
-        } catch (ex: Exception) {
+        } catch (_: Exception) {
             mainHandler.post {
-                lblTopStatus.text = "✕ Endereço inválido"
+                lblTopStatus.text = "Endereço inválido"
                 lblTopStatus.setTextColor(C_AMBER)
-                toast("URL inválida: \$url")
             }
             return
         }
 
-        ws = httpClient.newWebSocket(req, object : WebSocketListener() {
+        val newWs = httpClient.newWebSocket(req, object : WebSocketListener() {
             override fun onOpen(webSocket: WebSocket, response: Response) {
+                if (myGen != connGen.get()) {
+                    try { webSocket.close(1000, "stale") } catch (_: Exception) { }
+                    return
+                }
                 connected = true
+                consecutiveFailures = 0
                 mainHandler.post {
-                    lblTopStatus.text = "● \$label"
+                    lblTopStatus.text = "Conectado · \$label"
                     lblTopStatus.setTextColor(C_GREEN)
+                    refreshLanPeersUi()
                 }
                 val join = JSONObject()
                     .put("type", "mesh:join")
@@ -1991,7 +2427,7 @@ class MainActivity : AppCompatActivity() {
                         .put("id", deviceId)
                         .put("name", deviceName)
                         .put("os", "android")
-                        .put("kind", "mobile")
+                        .put("kind", if (isTabletMode) "tablet" else "mobile")
                         .put("status", "online")
                         .put("companionConnected", true)
                         .put("telemetry", collectTelemetry()))
@@ -2000,26 +2436,42 @@ class MainActivity : AppCompatActivity() {
             }
 
             override fun onMessage(webSocket: WebSocket, text: String) {
+                if (myGen != connGen.get()) return
                 try { handleMessage(JSONObject(text)) } catch (_: Exception) { }
             }
 
             override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                if (myGen != connGen.get() || destroyed) return
                 connected = false
+                consecutiveFailures++
+                val isSelf = url.startsWith("ws://127.0.0.1")
+                if (!isSelf && consecutiveFailures >= 2) {
+                    // Firewall / unreachable PC -> stop looping and fall back cleanly to local Android Hub!
+                    manualHostPort = ""
+                    mainHandler.post {
+                        lblTopStatus.text = "PC inacessível · Hub Local ativo (\${getLocalLanIp()}:\$LAN_WS_PORT)"
+                        lblTopStatus.setTextColor(C_AMBER)
+                        connectToEndpoint("ws://127.0.0.1:\$LAN_WS_PORT/ws", "Hub Local (\${getLocalLanIp()})", force = true)
+                    }
+                    return
+                }
                 mainHandler.post {
-                    lblTopStatus.text = "◌ Reconectando (\$label)..."
+                    lblTopStatus.text = "Reconectando a \$label..."
                     lblTopStatus.setTextColor(C_AMBER)
                 }
-                if (!destroyed && activeWsUrl == url) {
-                    mainHandler.postDelayed({
-                        if (!destroyed && !connected && activeWsUrl == url) connectToEndpoint(url, label, force = true)
-                    }, 2600)
-                }
+                mainHandler.postDelayed({
+                    if (!destroyed && myGen == connGen.get() && !connected) {
+                        connectToEndpoint(url, label, force = true)
+                    }
+                }, 3000)
             }
 
             override fun onClosed(webSocket: WebSocket, code: Int, reason: String) {
+                if (myGen != connGen.get()) return
                 connected = false
             }
         })
+        ws = newWs
     }
 
     private fun startTelemetryHeartbeat() {
@@ -2057,7 +2509,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun getTargetDevice(): MeshDevice? {
-        return devices.firstOrNull { it.id == selectedDeviceId }
+        return devices.firstOrNull { it.id == selectedDeviceId && it.id != deviceId }
             ?: devices.firstOrNull { it.id != deviceId }
             ?: devices.firstOrNull()
     }
@@ -2068,12 +2520,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun pushClipboard(text: String) {
+        lastSyncedClip = text
         sendJson(JSONObject()
             .put("type", "clipboard:push")
             .put("content", text)
             .put("sourceDeviceId", deviceId)
             .put("sourceDeviceName", deviceName))
-        toast("Texto sincronizado pela rede local.")
+        toast("Texto sincronizado com todos os dispositivos.")
     }
 
     private fun sendFileFromUri(uri: Uri) {
@@ -2114,11 +2567,8 @@ class MainActivity : AppCompatActivity() {
                     if (targetId != null) chObj.put("targetDeviceId", targetId)
                     sendJson(chObj)
                     val pct = ((i + 1) * 100) / total
-                    mainHandler.post {
-                        fileProgress.progress = pct
-                        lblFileStatus.text = "Enviando \$fileName · \$pct%"
-                    }
-                    Thread.sleep(5)
+                    mainHandler.post { fileProgress.progress = pct; lblFileStatus.text = "Enviando \$fileName · \$pct%" }
+                    Thread.sleep(4)
                 }
 
                 val doneObj = JSONObject().put("type", "file:complete").put("transferId", tid)
@@ -2167,7 +2617,8 @@ class MainActivity : AppCompatActivity() {
                             y = o.optDouble("y", 180.0).toFloat(),
                             cpu = tel?.optInt("cpuUsage", 0) ?: 0,
                             ram = tel?.optInt("memoryUsagePercent", 0) ?: 0,
-                            battery = if (tel != null && !tel.isNull("batteryLevel")) tel.optInt("batteryLevel") else null
+                            battery = if (tel != null && !tel.isNull("batteryLevel")) tel.optInt("batteryLevel") else null,
+                            lanIp = o.optString("lanIp", "")
                         ))
                     } else {
                         existing.name = o.optString("name", existing.name)
@@ -2181,6 +2632,15 @@ class MainActivity : AppCompatActivity() {
                         }
                     }
                     syncMapUi()
+                    refreshLanPeersUi()
+                }
+            }
+            "device:left" -> {
+                val id = msg.optString("deviceId")
+                mainHandler.post {
+                    devices.removeAll { it.id == id }
+                    syncMapUi()
+                    refreshLanPeersUi()
                 }
             }
             "telemetry:pong" -> {
@@ -2188,15 +2648,68 @@ class MainActivity : AppCompatActivity() {
                 if (sent > 0L) {
                     rttMs = max(1, (System.currentTimeMillis() - sent).toInt())
                     mainHandler.post {
-                        if (connected) lblTopStatus.text = "● \$activeHubLabel · \${rttMs} ms"
+                        if (connected) {
+                            val count = devices.size
+                            lblTopStatus.text = "Conectado · \$activeHubLabel · \${rttMs} ms · \$count disp."
+                        }
                     }
+                }
+            }
+            "screen:start" -> {
+                val srcName = msg.optString("sourceDeviceName", "Computador")
+                val w = msg.optInt("width", 1280)
+                val h = msg.optInt("height", 720)
+                screenResText = "\${w}×\${h}"
+                mainHandler.post {
+                    lblScreenStatus.text = "Recebendo tela de \$srcName (\$screenResText)"
+                    switchTab("screen")
+                }
+            }
+            "screen:frame" -> {
+                val b64 = msg.optString("data")
+                if (b64.isNotEmpty()) {
+                    try {
+                        val bytes = Base64.decode(b64, Base64.DEFAULT)
+                        val bmp = BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        if (bmp != null) {
+                            val w = msg.optInt("width", bmp.width)
+                            val h = msg.optInt("height", bmp.height)
+                            screenFpsCount++
+                            val now = SystemClock.uptimeMillis()
+                            if (now - screenFpsLastMs >= 1000L) {
+                                screenFps = screenFpsCount
+                                screenFpsCount = 0
+                                screenFpsLastMs = now
+                                mainHandler.post {
+                                    lblScreenStatus.text = "Segunda Tela Ativa · \${w}×\${h} · \${screenFps} FPS · Toque para controlar"
+                                }
+                            }
+                            liveScreenView.updateFrame(bmp)
+                        }
+                    } catch (_: Exception) { }
+                }
+            }
+            "screen:stop" -> {
+                mainHandler.post {
+                    liveScreenView.updateFrame(null)
+                    lblScreenStatus.text = "Transmissão de tela encerrada."
+                    if (fullscreenScreen) setScreenFullscreen(false)
                 }
             }
             "clipboard:added" -> {
                 val o = msg.optJSONObject("item") ?: return
+                val content = o.optString("content")
+                val srcId = o.optString("sourceDeviceId")
                 mainHandler.post {
-                    clipItems.add(0, ClipItem(o.optString("id"), o.optString("content"), o.optString("sourceDeviceName", "Peer")))
+                    clipItems.add(0, ClipItem(o.optString("id"), content, o.optString("sourceDeviceName", "Peer")))
                     refreshClipboardUi()
+                    if (autoClipboardSync && srcId != deviceId && content.isNotBlank() && content != lastSyncedClip) {
+                        lastSyncedClip = content
+                        try {
+                            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                            cm.setPrimaryClip(ClipData.newPlainText("Continuum", content))
+                        } catch (_: Exception) { }
+                    }
                 }
             }
             "notification:added" -> {
@@ -2265,14 +2778,18 @@ class MainActivity : AppCompatActivity() {
                 y = o.optDouble("y", (130 + (i / 3) * 160).toDouble()).toFloat(),
                 cpu = tel?.optInt("cpuUsage", 0) ?: 0,
                 ram = tel?.optInt("memoryUsagePercent", 0) ?: 0,
-                battery = if (tel != null && !tel.isNull("batteryLevel")) tel.optInt("batteryLevel") else null
+                battery = if (tel != null && !tel.isNull("batteryLevel")) tel.optInt("batteryLevel") else null,
+                lanIp = o.optString("lanIp", "")
             ))
         }
         mainHandler.post {
             devices.clear()
             devices.addAll(parsed)
-            if (selectedDeviceId == null) selectedDeviceId = devices.firstOrNull { it.id != deviceId }?.id
+            if (selectedDeviceId == null || devices.none { it.id == selectedDeviceId }) {
+                selectedDeviceId = devices.firstOrNull { it.id != deviceId }?.id
+            }
             syncMapUi()
+            refreshLanPeersUi()
         }
     }
 
@@ -2281,16 +2798,33 @@ class MainActivity : AppCompatActivity() {
         spatialMap.selectedId = selectedDeviceId
         spatialMap.invalidate()
         updateSelectedSummary()
+        refreshTelemetryUi()
     }
 
     private fun updateSelectedSummary() {
         val tgt = getTargetDevice()
-        if (tgt != null) {
+        if (tgt != null && tgt.id != deviceId) {
             lblMapSelected.text = "Alvo: \${tgt.name} (\${tgt.os.uppercase()}) · CPU \${tgt.cpu}% · RAM \${tgt.ram}%"
             lblRemoteTarget.text = "Controlando: \${tgt.name} (\${tgt.os.uppercase()})"
         } else {
-            lblMapSelected.text = "Radar ativo · Abra o Continuum no Linux ou Windows na mesma rede Wi-Fi."
-            lblRemoteTarget.text = "Controlando: buscando PC..."
+            lblMapSelected.text = "Aguardando computador na rede Wi-Fi · IP deste dispositivo: \${getLocalLanIp()}:\$LAN_WS_PORT"
+            lblRemoteTarget.text = "Controlando: aguardando PC na rede local..."
+        }
+    }
+
+    private fun refreshTelemetryUi() {
+        telemetryContainer.removeAllViews()
+        for (d in devices) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = roundedBg(C_CARD_SUBTLE, C_BORDER, 10f, this@MainActivity)
+                setPadding(dp(this@MainActivity, 14), dp(this@MainActivity, 10), dp(this@MainActivity, 14), dp(this@MainActivity, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(this@MainActivity, 8) }
+            }
+            val bat = if (d.battery != null) " · Bateria \${d.battery}%" else ""
+            row.addView(TextView(this).apply { text = "\${d.name} (\${d.os.uppercase()})"; setTextColor(C_TEXT); textSize = 13.5f; typeface = Typeface.DEFAULT_BOLD })
+            row.addView(TextView(this).apply { text = "CPU \${d.cpu}% · RAM \${d.ram}%\$bat"; setTextColor(C_CYAN); textSize = 12f; typeface = Typeface.MONOSPACE })
+            telemetryContainer.addView(row)
         }
     }
 
@@ -2300,17 +2834,18 @@ class MainActivity : AppCompatActivity() {
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL
                 gravity = Gravity.CENTER_VERTICAL
-                background = glassDrawable(C_GLASS_SUBTLE, C_BORDER, 10f, this@MainActivity)
-                setPadding(dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 8), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 8))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dpToPx(this@MainActivity, 6) }
+                background = roundedBg(C_CARD_SUBTLE, C_BORDER, 10f, this@MainActivity)
+                setPadding(dp(this@MainActivity, 12), dp(this@MainActivity, 10), dp(this@MainActivity, 12), dp(this@MainActivity, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(this@MainActivity, 8) }
             }
             val tv = TextView(this).apply {
-                text = "[\${item.source}] \${item.content.take(100)}"
+                text = "[\${item.source}] \${item.content.take(120)}"
                 setTextColor(C_TEXT)
-                textSize = 12f
-                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f)
+                textSize = 12.5f
+                layoutParams = LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f).apply { rightMargin = dp(this@MainActivity, 8) }
             }
-            val bCopy = makeHoloBtn("Copiar") {
+            val bCopy = makeBtn("Copiar", false, 38) {
+                lastSyncedClip = item.content
                 val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
                 cm.setPrimaryClip(ClipData.newPlainText("Continuum", item.content))
                 toast("Copiado!")
@@ -2327,10 +2862,10 @@ class MainActivity : AppCompatActivity() {
             val tv = TextView(this).apply {
                 text = "[\${n.source}] \${n.title}: \${n.body}"
                 setTextColor(C_TEXT)
-                textSize = 12f
-                background = glassDrawable(C_GLASS_SUBTLE, C_BORDER, 10f, this@MainActivity)
-                setPadding(dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 8), dpToPx(this@MainActivity, 10), dpToPx(this@MainActivity, 8))
-                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dpToPx(this@MainActivity, 6) }
+                textSize = 12.5f
+                background = roundedBg(C_CARD_SUBTLE, C_BORDER, 10f, this@MainActivity)
+                setPadding(dp(this@MainActivity, 12), dp(this@MainActivity, 10), dp(this@MainActivity, 12), dp(this@MainActivity, 10))
+                layoutParams = LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT).apply { bottomMargin = dp(this@MainActivity, 8) }
             }
             notifListContainer.addView(tv)
         }
@@ -2340,8 +2875,8 @@ class MainActivity : AppCompatActivity() {
         val tv = TextView(this).apply {
             this.text = text
             setTextColor(C_TEXT)
-            textSize = 12f
-            setPadding(0, dpToPx(this@MainActivity, 6), 0, 0)
+            textSize = 12.5f
+            setPadding(0, dp(this@MainActivity, 8), 0, 0)
         }
         fileListContainer.addView(tv, 0)
     }
@@ -2350,6 +2885,11 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         destroyed = true
+        connGen.incrementAndGet()
+        try {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            clipListener?.let { cm.removePrimaryClipChangedListener(it) }
+        } catch (_: Exception) { }
         try { ws?.close(1000, "exit") } catch (_: Exception) { }
         try { localHub.stop() } catch (_: Exception) { }
         try { discoverySocket?.close() } catch (_: Exception) { }

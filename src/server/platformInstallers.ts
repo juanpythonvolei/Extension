@@ -1237,7 +1237,7 @@ StartupWMClass=continuum_app.py
   const installedSizeKb = Math.max(24, Math.ceil(totalBytes / 1024));
 
   const controlFile = `Package: continuum-mesh
-Version: 4.0.0
+Version: 5.0.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -1246,10 +1246,10 @@ Depends: python3, python3-gi, gir1.2-gtk-3.0
 Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
 Homepage: ${ctx.appUrl}
-Description: Continuum 4.0 - Aplicativo Nativo Linux Holografico (GTK 3 + Radar Auto LAN)
- Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com interface holografica,
- descoberta automatica LAN em 3 camadas (UDP Unicast + Radar TCP /24 + Hub 45891),
- mapa espacial com medidores radiais CPU/RAM, trackpad tatil com rastro luminoso e arquivos.
+Description: Continuum 5.0 - Aplicativo Nativo Linux (Extensao de Tela + KVM + Clipboard Auto)
+ Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com 5 espacos de trabalho,
+ Extensao de Monitor/Segunda Tela em tempo real via LAN, Mouse e Teclado Continuo (KVM),
+ Area de Transferencia Universal Automatica e protocolo LAN Zero-Loop v5.0.
  Malha padrao: ${room}
 `;
 
@@ -1330,7 +1330,7 @@ Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
 StartupWMClass=continuum_app.py
-X-AppImage-Version=4.0.0
+X-AppImage-Version=5.0.0
 `;
 
   const appdataXml = `<?xml version="1.0" encoding="UTF-8"?>

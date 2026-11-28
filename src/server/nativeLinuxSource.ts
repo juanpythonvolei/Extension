@@ -5,22 +5,26 @@ function safeStr(val: string): string {
 }
 
 /**
- * 100% NATIVE LINUX DESKTOP APPLICATION v4.0.0 — HOLOGRAPHIC SPATIAL UI + 3-LAYER AUTO LAN MESH
- * - Pure Python 3 Stdlib + Native GTK 3 + Cairo (ZERO WebView, ZERO Electron, ZERO Browser)
- * - 3-Layer Zero-Config Direct App-to-App LAN Mesh:
- *     1) Embedded RFC-6455 WebSocket Hub + /continuum-info HTTP probe (TCP 45891)
- *     2) Active UDP Broadcast + /24 Subnet Broadcast + Multicast 239.255.45.90 + Direct Unicast Probe Reply (UDP 45890)
- *     3) Fast Parallel /24 TCP LAN Scanner (32 workers) — discovers Windows & Android even when UDP is blocked!
- * - Holographic 60fps Cairo Spatial Map (sweeping cyan radar, flowing data packets along gradient Bezier beams,
- *   frosted glass device cards with iridescent borders & circular CPU/RAM arc gauges) + Holographic Trackpad with comet trails.
+ * 100% NATIVE LINUX DESKTOP APPLICATION v5.0.0 — WEB-APP PARITY + HOLOGRAPHIC UI + ZERO-LOOP LAN MESH
+ * - Pure Python 3 Stdlib + Native GTK 3 + Cairo + GdkPixbuf (ZERO WebView, ZERO Electron, ZERO Browser)
+ * - ZERO Reconnect Loops:
+ *     * Full RFC-6455 fragmented frame reassembly + TCP_NODELAY + SO_KEEPALIVE
+ *     * Peer-aware hub lock (never drops a working mesh when remotePeers > 0 or devices > 1)
+ *     * Pre-connect TCP /continuum-info probe + automatic roomCode sync + bidirectional firewall fallback
+ * - Complete 5-Workspace Suite Matching & Surpassing the Web App:
+ *     1. Mapa Espacial (60fps Cairo Holographic Radar + Flowing Data Beams + Drag & Drop + Radial CPU/RAM Gauges)
+ *     2. Extensão de Tela (Real Native Monitor Streaming via GdkPixbuf JPEG + Monitor Picker + Live Screen Receiver)
+ *     3. Mouse & Teclado (Edge-Crossing KVM Flow + Live Capture Trackpad/Keyboard + Combos + Media Controls)
+ *     4. Clipboard & Arquivos (Real Automatic Bidirectional GTK Clipboard Sync + History + Direct LAN File Transfer)
+ *     5. Rede & Sistema (Live Telemetry Cards + 3-Layer Wi-Fi Radar + 1-Click Connect + Direct IP + UFW Helper + Alerts)
  */
 export function buildLinuxNativeAppPy(ctx: InstallerContext): string {
   const room = safeStr(ctx.roomCode || 'MESH01');
 
   return `#!/usr/bin/env python3
 """
-Continuum v4.0.0 — Aplicativo Desktop 100% Nativo para Linux (GTK 3 + Cairo Holografico + Malha Direta LAN P2P)
-Comunicacao direta e automatica entre Linux, Windows e Android via TCP 45891 + UDP 45890 + Radar TCP /24.
+Continuum v5.0.0 — Aplicativo Desktop 100% Nativo para Linux (GTK 3 + Cairo Holografico + Extensao de Tela + KVM + Clipboard Auto)
+Comunicacao direta e estavel entre Linux, Windows e Android via TCP 45891 + UDP 45890 + Radar TCP /24.
 """
 
 import base64
@@ -43,9 +47,10 @@ import threading
 import time
 import urllib.parse
 
-APP_VERSION = "4.0.0"
+APP_VERSION = "5.0.0"
 LAN_UDP_PORT = 45890
 LAN_WS_PORT = 45891
+PROTO_V5 = "continuum-lan-v5"
 PROTO_V4 = "continuum-lan-v4"
 PROTO_V3 = "continuum-lan-v3"
 MULTICAST_ADDR = "239.255.45.90"
@@ -63,6 +68,7 @@ LOG_FILE = os.path.join(LOG_DIR, "app.log")
 DOWNLOADS_DIR = os.path.expanduser("~/Downloads/Continuum")
 
 _prev_cpu = None
+_active_mon_geom = {"x": 0, "y": 0, "w": 1920, "h": 1080}
 
 
 def log_msg(msg):
@@ -115,7 +121,6 @@ def normalize_ws_endpoint(raw):
     if not s:
         return ""
 
-    # Shorthand ".42" or "42" -> auto-complete local /24 subnet
     dot_clean = s.lstrip(".")
     if re.match(r"^[0-9]{1,3}(:[0-9]{2,5})?$", dot_clean):
         lan_ip = get_local_lan_ip()
@@ -135,11 +140,19 @@ def normalize_ws_endpoint(raw):
     return f"ws://{host}:{port}/ws"
 
 
-def probe_http_info(host, port=LAN_WS_PORT, timeout=0.28):
+def parse_host_port(raw):
+    ws = normalize_ws_endpoint(raw)
+    if not ws:
+        return None
+    p = urllib.parse.urlparse(ws)
+    return (p.hostname, p.port or LAN_WS_PORT)
+
+
+def probe_http_info(host, port=LAN_WS_PORT, timeout=0.32):
     s = None
     try:
         s = socket.create_connection((host, int(port)), timeout=timeout)
-        s.settimeout(timeout + 0.25)
+        s.settimeout(timeout + 0.3)
         req = f"GET /continuum-info HTTP/1.1\\r\\nHost: {host}:{port}\\r\\nConnection: close\\r\\n\\r\\n"
         s.sendall(req.encode("ascii"))
         data = b""
@@ -170,6 +183,9 @@ def load_config():
         "autoLan": True,
         "wsPort": LAN_WS_PORT,
         "sensitivity": 1.6,
+        "autoClipboard": True,
+        "kvmEdgeEnabled": False,
+        "kvmEdgeSide": "right",
     }
     try:
         if os.path.exists(CONFIG_FILE):
@@ -272,6 +288,20 @@ def execute_os_input(event, ui_notify=None):
         dy = int(round(float(event.get("dy", 0)) * 1.8))
         if dx != 0 or dy != 0:
             run_cmd(["xdotool", "mousemove_relative", "--", str(dx), str(dy)])
+    elif kind == "abs_move" and has_xdo:
+        nx = max(0.0, min(1.0, float(event.get("nx", 0.5))))
+        ny = max(0.0, min(1.0, float(event.get("ny", 0.5))))
+        ax = int(_active_mon_geom["x"] + nx * _active_mon_geom["w"])
+        ay = int(_active_mon_geom["y"] + ny * _active_mon_geom["h"])
+        run_cmd(["xdotool", "mousemove", str(ax), str(ay)])
+    elif kind == "abs_click" and has_xdo:
+        nx = max(0.0, min(1.0, float(event.get("nx", 0.5))))
+        ny = max(0.0, min(1.0, float(event.get("ny", 0.5))))
+        ax = int(_active_mon_geom["x"] + nx * _active_mon_geom["w"])
+        ay = int(_active_mon_geom["y"] + ny * _active_mon_geom["h"])
+        btn_map = {"left": "1", "middle": "2", "right": "3"}
+        btn = btn_map.get(event.get("button", "left"), "1")
+        run_cmd(["xdotool", "mousemove", str(ax), str(ay), "click", btn])
     elif kind == "click" and has_xdo:
         btn_map = {"left": "1", "middle": "2", "right": "3"}
         btn = btn_map.get(event.get("button", "left"), "1")
@@ -289,6 +319,7 @@ def execute_os_input(event, ui_notify=None):
         if text:
             run_cmd(["xdotool", "type", "--clearmodifiers", "--delay", "8", "--", text])
     elif kind == "key" and has_xdo:
+        raw_key = str(event.get("key", ""))
         key_map = {
             "Enter": "Return",
             "Backspace": "BackSpace",
@@ -299,8 +330,13 @@ def execute_os_input(event, ui_notify=None):
             "ArrowDown": "Down",
             "ArrowLeft": "Left",
             "ArrowRight": "Right",
+            "Alt+Tab": "alt+Tab",
+            "Ctrl+C": "ctrl+c",
+            "Ctrl+V": "ctrl+v",
+            "Ctrl+Z": "ctrl+z",
+            "Super": "Super_L",
         }
-        k = key_map.get(str(event.get("key", "")), str(event.get("key", "")))
+        k = key_map.get(raw_key, raw_key)
         if k:
             run_cmd(["xdotool", "key", k])
     elif kind == "media":
@@ -348,7 +384,7 @@ def execute_os_input(event, ui_notify=None):
 
 
 # ---------------------------------------------------------------------------
-# RFC-6455 Pure-Python Helpers
+# RFC-6455 Pure-Python Helpers (Full Fragmented Frame Support)
 # ---------------------------------------------------------------------------
 
 def recv_exact(sock, n):
@@ -381,20 +417,37 @@ def ws_encode_frame(payload_bytes, opcode=0x1, masked=False):
     return bytes(header) + payload_bytes
 
 
-def ws_read_frame(sock):
-    b1, b2 = recv_exact(sock, 2)
-    opcode = b1 & 0x0F
-    is_masked = (b2 & 0x80) != 0
-    length = b2 & 0x7F
-    if length == 126:
-        length = struct.unpack("!H", recv_exact(sock, 2))[0]
-    elif length == 127:
-        length = struct.unpack("!Q", recv_exact(sock, 8))[0]
-    mask = recv_exact(sock, 4) if is_masked else None
-    payload = recv_exact(sock, length) if length > 0 else b""
-    if mask is not None and payload:
-        payload = bytes(b ^ mask[i & 3] for i, b in enumerate(payload))
-    return opcode, payload
+def ws_read_message(sock):
+    """Reads a complete RFC-6455 message, automatically reassembling fragmented frames (FIN=0 + opcode=0)."""
+    frag_chunks = []
+    frag_opcode = None
+    while True:
+        b1, b2 = recv_exact(sock, 2)
+        fin = (b1 & 0x80) != 0
+        opcode = b1 & 0x0F
+        is_masked = (b2 & 0x80) != 0
+        length = b2 & 0x7F
+        if length == 126:
+            length = struct.unpack("!H", recv_exact(sock, 2))[0]
+        elif length == 127:
+            length = struct.unpack("!Q", recv_exact(sock, 8))[0]
+        if length > 32 * 1024 * 1024:
+            raise ConnectionError("Frame too large")
+        mask = recv_exact(sock, 4) if is_masked else None
+        payload = recv_exact(sock, length) if length > 0 else b""
+        if mask is not None and payload:
+            payload = bytes(b ^ mask[i & 3] for i, b in enumerate(payload))
+        if opcode in (0x8, 0x9, 0xA):
+            return opcode, payload
+        if opcode != 0x0:
+            if fin:
+                return opcode, payload
+            frag_opcode = opcode
+            frag_chunks = [payload]
+        else:
+            frag_chunks.append(payload)
+            if fin:
+                return (frag_opcode or 0x1), b"".join(frag_chunks)
 
 
 # ---------------------------------------------------------------------------
@@ -455,6 +508,10 @@ class EmbeddedLanHub:
             rm = self.rooms.get(room_code)
             return len(rm["devices"]) if rm else 0
 
+    def remote_peer_count(self):
+        with self.lock:
+            return sum(1 for m in self.clients.values() if m.get("id") and m.get("id") != self.hub_id)
+
     def _get_room(self, code):
         if code not in self.rooms:
             self.rooms[code] = {"devices": {}, "clipboard": [], "notifications": []}
@@ -464,6 +521,11 @@ class EmbeddedLanHub:
         while self.running:
             try:
                 conn, addr = self.server_sock.accept()
+                try:
+                    conn.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+                    conn.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                except Exception:
+                    pass
                 conn.settimeout(15.0)
                 threading.Thread(target=self._handle_client, args=(conn, addr), daemon=True).start()
             except socket.timeout:
@@ -539,7 +601,7 @@ class EmbeddedLanHub:
                 room = self.get_room_fn()
                 body = json.dumps({
                     "ok": True,
-                    "proto": PROTO_V4,
+                    "proto": PROTO_V5,
                     "hubId": self.hub_id,
                     "hubName": HOSTNAME,
                     "hub": HOSTNAME,
@@ -549,6 +611,7 @@ class EmbeddedLanHub:
                     "ip": get_local_lan_ip(),
                     "startedAt": self.started_at,
                     "peers": self.peer_count(room),
+                    "remotePeers": self.remote_peer_count(),
                     "version": APP_VERSION,
                 }).encode("utf-8")
                 conn.sendall(
@@ -572,7 +635,7 @@ class EmbeddedLanHub:
                 self.clients[conn] = {"id": None, "room": None, "addr": addr[0], "send_lock": threading.Lock()}
 
             while self.running:
-                opcode, payload = ws_read_frame(conn)
+                opcode, payload = ws_read_message(conn)
                 if opcode == 0x8:
                     break
                 if opcode == 0x9:
@@ -702,7 +765,7 @@ class EmbeddedLanHub:
                     updated = None
             if updated:
                 self._broadcast_room(room_code, {"type": "device:updated", "device": updated})
-        elif mtype == "input:event":
+        elif mtype in ("input:event", "file:start", "file:chunk", "file:complete", "screen:start", "screen:frame", "screen:stop", "screen:request"):
             target_id = msg.get("targetDeviceId")
             if target_id:
                 self._send_to_device(room_code, target_id, msg, exclude=conn)
@@ -740,16 +803,10 @@ class EmbeddedLanHub:
                 rm["notifications"].insert(0, notif)
                 rm["notifications"] = rm["notifications"][:40]
             self._broadcast_room(room_code, {"type": "notification:added", "notification": notif})
-        elif mtype in ("file:start", "file:chunk", "file:complete"):
-            target_id = msg.get("targetDeviceId")
-            if target_id:
-                self._send_to_device(room_code, target_id, msg, exclude=conn)
-            else:
-                self._broadcast_room(room_code, msg, exclude=conn)
 
 
 # ---------------------------------------------------------------------------
-# 3-Layer Hybrid LAN Discovery (UDP Broadcast + Subnet + Multicast + Unicast Reply + Parallel /24 TCP Scan)
+# 3-Layer Hybrid LAN Discovery (UDP + Multicast + Unicast Reply + Parallel /24 TCP Scan)
 # ---------------------------------------------------------------------------
 
 class LanDiscoveryService:
@@ -776,30 +833,10 @@ class LanDiscoveryService:
     def list_peers(self):
         now = time.time()
         with self.lock:
-            stale = [k for k, v in self.discovered.items() if now - v.get("lastSeen", 0) > 25.0]
+            stale = [k for k, v in self.discovered.items() if now - v.get("lastSeen", 0) > 28.0]
             for k in stale:
                 self.discovered.pop(k, None)
-            return list(self.discovered.values())
-
-    def elect_best_hub(self, room_code):
-        peers = [p for p in self.list_peers() if p.get("roomCode") == room_code and p.get("hubId") != self.hub.hub_id]
-        candidates = list(peers)
-        if self.hub.active:
-            candidates.append({
-                "hubId": self.hub.hub_id,
-                "hubName": HOSTNAME,
-                "os": "linux",
-                "ip": "127.0.0.1",
-                "wsPort": self.hub.port,
-                "roomCode": room_code,
-                "startedAt": self.hub.started_at,
-                "isLocal": True,
-            })
-        if not candidates:
-            return None
-        # Prefer desktop hubs over mobile fallback hubs unless only mobile is reachable; tie-break by startedAt
-        candidates.sort(key=lambda c: (1 if c.get("os") == "android" else 0, int(c.get("startedAt", 0)), str(c.get("hubId", ""))))
-        return candidates[0]
+            return sorted(list(self.discovered.values()), key=lambda p: p.get("hubName", ""))
 
     def scan_subnet_tcp(self):
         if self.scanning:
@@ -834,6 +871,7 @@ class LanDiscoveryService:
                                     "roomCode": str(info.get("roomCode") or self.get_room_fn()),
                                     "startedAt": int(info.get("startedAt") or 0),
                                     "peers": int(info.get("peers") or 1),
+                                    "remotePeers": int(info.get("remotePeers") or 0),
                                     "via": "TCP Radar",
                                     "lastSeen": time.time(),
                                 }
@@ -856,7 +894,7 @@ class LanDiscoveryService:
     def _make_beacon(self, btype="beacon"):
         room = self.get_room_fn()
         return json.dumps({
-            "proto": PROTO_V4,
+            "proto": PROTO_V5,
             "type": btype,
             "roomCode": room,
             "hubId": self.hub.hub_id,
@@ -866,6 +904,7 @@ class LanDiscoveryService:
             "wsPort": self.hub.port,
             "startedAt": self.hub.started_at,
             "peers": self.hub.peer_count(room),
+            "remotePeers": self.hub.remote_peer_count(),
         }).encode("utf-8")
 
     def _broadcast_loop(self):
@@ -886,7 +925,7 @@ class LanDiscoveryService:
                     sock.sendto(payload, (MULTICAST_ADDR, LAN_UDP_PORT))
             except Exception:
                 pass
-            time.sleep(2.0)
+            time.sleep(2.2)
         try:
             sock.close()
         except Exception:
@@ -916,12 +955,11 @@ class LanDiscoveryService:
             try:
                 data, addr = sock.recvfrom(4096)
                 info = json.loads(data.decode("utf-8", errors="ignore"))
-                if info.get("proto") not in (PROTO_V4, PROTO_V3):
+                if info.get("proto") not in (PROTO_V5, PROTO_V4, PROTO_V3):
                     continue
                 hub_id = str(info.get("hubId") or "")
                 if not hub_id or hub_id == self.hub.hub_id:
                     continue
-                # Immediate direct unicast reply when Android/Windows sends an active probe!
                 if info.get("type") == "probe" and self.hub.active:
                     try:
                         sock.sendto(self._make_beacon("beacon"), addr)
@@ -937,6 +975,7 @@ class LanDiscoveryService:
                     "roomCode": str(info.get("roomCode") or DEFAULT_ROOM_CODE),
                     "startedAt": int(info.get("startedAt") or 0),
                     "peers": int(info.get("peers") or 1),
+                    "remotePeers": int(info.get("remotePeers") or 0),
                     "via": "UDP Auto",
                     "lastSeen": time.time(),
                 }
@@ -955,7 +994,7 @@ class LanDiscoveryService:
 
 
 # ---------------------------------------------------------------------------
-# Pure Python RFC-6455 WebSocket Client
+# Pure Python RFC-6455 WebSocket Client (Fragmented Frames + TCP_NODELAY)
 # ---------------------------------------------------------------------------
 
 class SimpleWebSocket:
@@ -974,6 +1013,11 @@ class SimpleWebSocket:
         if parsed.query:
             path += "?" + parsed.query
         raw = socket.create_connection((host, port), timeout=timeout)
+        try:
+            raw.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+            raw.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except Exception:
+            pass
         self.sock = ssl.create_default_context().wrap_socket(raw, server_hostname=host) if use_ssl else raw
         key = base64.b64encode(os.urandom(16)).decode("ascii")
         host_header = f"{host}:{port}" if parsed.port else host
@@ -1007,7 +1051,7 @@ class SimpleWebSocket:
 
     def recv_json(self):
         while not self.closed:
-            opcode, payload = ws_read_frame(self.sock)
+            opcode, payload = ws_read_message(self.sock)
             if opcode == 0x8:
                 self.close()
                 return None
@@ -1031,7 +1075,7 @@ class SimpleWebSocket:
 
 
 # ---------------------------------------------------------------------------
-# Unified Mesh Client
+# Stable Zero-Loop Mesh Client
 # ---------------------------------------------------------------------------
 
 class ContinuumMeshClient:
@@ -1049,6 +1093,9 @@ class ContinuumMeshClient:
         self.notifications = []
         self.incoming_files = {}
         self._reconnect_flag = threading.Event()
+        self._consecutive_fails = 0
+        self._auto_switch_lock = threading.Lock()
+        self._probing_auto = False
 
         self.hub = EmbeddedLanHub(
             port=int(cfg.get("wsPort") or LAN_WS_PORT),
@@ -1071,17 +1118,53 @@ class ContinuumMeshClient:
     def _on_lan_peers_changed(self):
         peers = self.discovery.list_peers()
         self._emit("lan_peers", peers)
-        if self.cfg.get("autoLan", True) and not self.cfg.get("manualPeer"):
-            best = self.discovery.elect_best_hub(self.cfg.get("roomCode", DEFAULT_ROOM_CODE))
-            if best and not best.get("isLocal"):
-                desired = f"ws://{best['ip']}:{best['wsPort']}/ws"
-                if self.connected and self.connected_url and desired != self.connected_url:
-                    self.reconnect()
+        # ZERO-LOOP RULE: NEVER auto-switch if we already have a connected peer in our mesh!
+        if not self.cfg.get("autoLan", True) or self.cfg.get("manualPeer"):
+            return
+        if self.hub.remote_peer_count() > 0 or len(self.devices) > 1:
+            return
+        if self._probing_auto:
+            return
+        # If alone on 127.0.0.1 and another device is discovered (e.g. Android Tablet when Linux UFW blocks 45891),
+        # probe it via TCP first; if reachable, join it outbound cleanly!
+        room = self.cfg.get("roomCode", DEFAULT_ROOM_CODE)
+        candidates = [p for p in peers if p.get("hubId") != self.hub.hub_id]
+        if not candidates:
+            return
+        candidates.sort(key=lambda c: (0 if c.get("roomCode") == room else 1, 0 if c.get("remotePeers", 0) > 0 else 1, int(c.get("startedAt", 0))))
+        best = candidates[0]
+        desired = f"ws://{best['ip']}:{best['wsPort']}/ws"
+        if desired == self.connected_url:
+            return
+        # Wait 4 seconds after startup before auto-joining an Android fallback hub so Android gets first chance to join PC
+        if best.get("os") == "android" and (time.time() * 1000 - self.hub.started_at) < 4000:
+            return
+
+        def _probe_and_join():
+            with self._auto_switch_lock:
+                if self._probing_auto:
+                    return
+                self._probing_auto = True
+            try:
+                info = probe_http_info(best["ip"], best["wsPort"], timeout=0.65)
+                if not info:
+                    return
+                if self.hub.remote_peer_count() > 0 or len(self.devices) > 1:
+                    return
+                r_room = str(info.get("roomCode") or "")
+                if r_room and r_room != self.cfg.get("roomCode"):
+                    self.cfg["roomCode"] = r_room
+                self._forced_auto_target = (desired, f"{best['hubName']} ({best['ip']})")
+                self.reconnect()
+            finally:
+                self._probing_auto = False
+
+        threading.Thread(target=_probe_and_join, daemon=True).start()
 
     def start(self):
+        self._forced_auto_target = None
         threading.Thread(target=self._run_loop, daemon=True).start()
         threading.Thread(target=self._telemetry_loop, daemon=True).start()
-        # Run an initial fast /24 TCP scan so Android/Windows are discovered even if UDP is blocked
         self.discovery.scan_subnet_tcp()
 
     def stop(self):
@@ -1097,11 +1180,35 @@ class ContinuumMeshClient:
         if self.ws:
             self.ws.close()
 
+    def connect_to_peer(self, host_port_str, room_code=None):
+        """User explicitly clicked Connect on a peer: probe first to sync roomCode, then connect cleanly!"""
+        hp = parse_host_port(host_port_str)
+        if not hp:
+            self._emit("toast", "Endereco IP invalido. Use ex: 192.168.1.42 ou .42")
+            return
+        host, port = hp
+
+        def _probe():
+            info = probe_http_info(host, port, timeout=1.5)
+            if info:
+                r_room = str(info.get("roomCode") or room_code or self.cfg.get("roomCode", DEFAULT_ROOM_CODE))
+                self.cfg["roomCode"] = r_room
+                self.cfg["manualPeer"] = f"{host}:{port}"
+                self.cfg["autoLan"] = False
+                save_config(self.cfg)
+                self._emit("room_synced", r_room)
+                self.reconnect()
+            else:
+                self._emit("toast", f"Dispositivo {host}:{port} nao respondeu na porta {port}. Verifique a rede Wi-Fi.")
+
+        threading.Thread(target=_probe, daemon=True).start()
+
     def set_connection_mode(self, room_code, manual_peer="", auto_lan=True):
         clean_room = "".join(c for c in (room_code or "").upper() if c.isalnum())[:12] or DEFAULT_ROOM_CODE
         self.cfg["roomCode"] = clean_room
         self.cfg["manualPeer"] = (manual_peer or "").strip()
         self.cfg["autoLan"] = bool(auto_lan)
+        self._forced_auto_target = None
         save_config(self.cfg)
         self.reconnect()
 
@@ -1111,11 +1218,8 @@ class ContinuumMeshClient:
             url = normalize_ws_endpoint(manual)
             if url:
                 return url, f"Peer LAN ({manual})"
-        room = self.cfg.get("roomCode", DEFAULT_ROOM_CODE)
-        if self.cfg.get("autoLan", True):
-            best = self.discovery.elect_best_hub(room)
-            if best and not best.get("isLocal"):
-                return f"ws://{best['ip']}:{best['wsPort']}/ws", f"Hub LAN · {best['hubName']} ({best['ip']})"
+        if getattr(self, "_forced_auto_target", None):
+            return self._forced_auto_target
         port = int(self.cfg.get("wsPort") or LAN_WS_PORT)
         return f"ws://127.0.0.1:{port}/ws", f"Hub Local ({get_local_lan_ip()}:{port})"
 
@@ -1166,7 +1270,7 @@ class ContinuumMeshClient:
         threading.Thread(target=_worker, daemon=True).start()
 
     def _run_loop(self):
-        time.sleep(0.35)
+        time.sleep(0.3)
         while self.running:
             self._reconnect_flag.clear()
             ws_url, hub_label = self._resolve_target_ws()
@@ -1178,6 +1282,7 @@ class ContinuumMeshClient:
                 ws.connect(timeout=5.0)
                 self.ws = ws
                 self.connected = True
+                self._consecutive_fails = 0
                 self._emit("status", {"state": "connected", "hub": hub_label, "url": ws_url})
 
                 room = self.cfg.get("roomCode", DEFAULT_ROOM_CODE)
@@ -1190,8 +1295,8 @@ class ContinuumMeshClient:
                         "os": "linux",
                         "kind": "desktop",
                         "status": "online",
-                        "screenWidth": 1920,
-                        "screenHeight": 1080,
+                        "screenWidth": _active_mon_geom["w"],
+                        "screenHeight": _active_mon_geom["h"],
                         "companionConnected": True,
                         "telemetry": collect_telemetry(),
                     },
@@ -1205,6 +1310,12 @@ class ContinuumMeshClient:
                     self._handle_message(msg)
             except Exception as exc:
                 log_msg(f"Conexao LAN encerrada ({ws_url}): {exc}")
+                self._consecutive_fails += 1
+                if not ws_url.startswith("ws://127.0.0.1") and self._consecutive_fails >= 2:
+                    self.cfg["manualPeer"] = ""
+                    self._forced_auto_target = None
+                    self._consecutive_fails = 0
+                    self._emit("toast", "Peer desconectou — retornando ao Hub Local.")
             finally:
                 self.connected = False
                 if self.ws:
@@ -1212,7 +1323,7 @@ class ContinuumMeshClient:
                     self.ws = None
                 self._emit("status", {"state": "reconnecting", "hub": hub_label, "url": ws_url})
             if self.running and not self._reconnect_flag.is_set():
-                time.sleep(1.8)
+                time.sleep(2.2)
 
     def _telemetry_loop(self):
         while self.running:
@@ -1261,6 +1372,8 @@ class ContinuumMeshClient:
                 self.clipboard.insert(0, item)
                 self.clipboard = self.clipboard[:40]
                 self._emit("clipboard", list(self.clipboard))
+                if item.get("sourceDeviceId") != DEVICE_ID:
+                    self._emit("clipboard_remote_sync", item.get("content", ""))
         elif mtype == "notification:added":
             notif = msg.get("notification")
             if notif:
@@ -1273,6 +1386,8 @@ class ContinuumMeshClient:
             target = msg.get("targetDeviceId")
             if not target or target == DEVICE_ID:
                 execute_os_input(msg.get("event") or {}, ui_notify=lambda t, b: self._emit("toast", f"{t}: {b}"))
+        elif mtype in ("screen:start", "screen:frame", "screen:stop", "screen:request"):
+            self._emit(mtype, msg)
         elif mtype == "file:start":
             tid = msg.get("transferId")
             if tid and msg.get("sourceDeviceId") != DEVICE_ID:
@@ -1311,7 +1426,7 @@ class ContinuumMeshClient:
 
 
 # ---------------------------------------------------------------------------
-# Holographic 60 FPS Native GTK 3 + Cairo UI (v4.0.0)
+# Holographic 60 FPS Native GTK 3 + Cairo UI (v5.0.0 — Web-App Parity, Zero Cramping)
 # ---------------------------------------------------------------------------
 
 def cairo_rounded_rect(cr, x, y, w, h, r):
@@ -1335,1207 +1450,1417 @@ def run_gtk_app(cfg, start_hub=True):
     import gi
     gi.require_version("Gtk", "3.0")
     import cairo
-    from gi.repository import Gtk, Gdk, GLib
+    from gi.repository import Gtk, Gdk, GdkPixbuf, GLib
 
     css = b"""
-    window, .root-bg { background-color: #050810; color: #F1F5F9; font-family: "Plus Jakarta Sans", "Ubuntu", "Cantarell", sans-serif; }
-    .sidebar { background-color: #0A101E; border-right: 1px solid #1A2B49; }
-    .topbar { background-color: #080E1B; border-bottom: 1px solid #1C3458; }
-    .brand-title { font-size: 16px; font-weight: 800; color: #22D3EE; letter-spacing: 1px; }
-    .brand-sub { font-size: 11px; color: #7C94B8; }
+    window, .root-bg { background-color: #060A13; color: #F1F5F9; font-family: "Plus Jakarta Sans", "Ubuntu", "Cantarell", sans-serif; }
+    .sidebar { background-color: #0A101E; border-right: 1px solid #1C2F4E; }
+    .topbar { background-color: #080E1B; border-bottom: 1px solid #1C2F4E; }
+    .brand-title { font-size: 17px; font-weight: 800; color: #F8FAFC; }
+    .brand-sub { font-size: 11px; color: #22D3EE; font-weight: 600; }
+    .page-title { font-size: 15px; font-weight: 700; color: #F8FAFC; }
     .section-title { font-size: 15px; font-weight: 700; color: #F8FAFC; }
-    .card { background-color: #0E1628; border: 1px solid #1E3354; border-radius: 12px; }
-    .card-subtle { background-color: #09101E; border: 1px solid #192C4A; border-radius: 10px; }
-    .muted { color: #8BA3C4; font-size: 12px; }
+    .card { background-color: #10192B; border: 1px solid #1E314F; border-radius: 12px; }
+    .card-subtle { background-color: #0B1324; border: 1px solid #192B47; border-radius: 10px; }
+    .muted { color: #94A3B8; font-size: 12.5px; }
     .mono { font-family: "JetBrains Mono", "Ubuntu Mono", monospace; font-size: 12px; color: #22D3EE; }
-    .status-ok { color: #10B981; font-weight: 700; font-size: 12px; }
-    .status-cyan { color: #22D3EE; font-weight: 700; font-size: 12px; }
-    .nav-btn {
-        background-image: none;
-        background-color: transparent;
-        color: #8BA3C4;
-        border: 1px solid transparent;
-        border-radius: 10px;
-        padding: 10px 12px;
-        font-weight: 600;
-        font-size: 13px;
-    }
-    .nav-btn:hover { background-color: #111C33; color: #F1F5F9; }
-    .nav-btn-active {
-        background-image: linear-gradient(90deg, #102442, #151E38);
-        color: #22D3EE;
-        border: 1px solid #22D3EE;
-        border-radius: 10px;
-        padding: 10px 12px;
-        font-weight: 700;
-        font-size: 13px;
-    }
-    button.btn-primary {
-        background-image: linear-gradient(135deg, #0891B2, #3B82F6, #8B5CF6);
-        color: #FFFFFF;
-        border: 1px solid #22D3EE;
-        border-radius: 9px;
-        padding: 7px 14px;
-        font-weight: 700;
-        font-size: 12px;
-    }
-    button.btn-primary:hover { background-image: linear-gradient(135deg, #06B6D4, #2563EB, #7C3AED); }
-    button.btn-secondary {
-        background-image: none;
-        background-color: #0E172A;
-        color: #E2E8F0;
-        border: 1px solid #22385C;
-        border-radius: 9px;
-        padding: 7px 12px;
-        font-weight: 600;
-        font-size: 12px;
-    }
-    button.btn-secondary:hover { background-color: #162440; border-color: #22D3EE; color: #FFFFFF; }
-    entry {
-        background-color: #060A13;
-        color: #F8FAFC;
-        border: 1px solid #22385C;
-        border-radius: 9px;
-        padding: 6px 10px;
-        font-size: 12px;
-    }
+    .status-ok { color: #10B981; font-weight: 700; font-size: 12.5px; }
+    .status-warn { color: #F59E0B; font-weight: 700; font-size: 12.5px; }
+    .nav-btn { background: transparent; color: #94A3B8; border: 1px solid transparent; border-radius: 10px; padding: 11px 14px; font-weight: 600; font-size: 13.5px; min-height: 22px; }
+    .nav-btn:hover { background-color: #111C32; color: #F1F5F9; }
+    .nav-btn-active { background-color: #13223D; color: #F8FAFC; border: 1px solid #22D3EE; border-radius: 10px; padding: 11px 14px; font-weight: 700; font-size: 13.5px; min-height: 22px; }
+    button.btn-primary { background-image: linear-gradient(135deg, #0891B2, #3B82F6, #6366F1); background-color: #2563EB; color: #FFFFFF; border: 1px solid #38BDF8; border-radius: 9px; padding: 9px 18px; font-weight: 700; font-size: 13px; min-height: 20px; }
+    button.btn-primary:hover { background-image: linear-gradient(135deg, #06B6D4, #2563EB, #4F46E5); }
+    button.btn-danger { background-color: #991B1B; color: #FFFFFF; border: 1px solid #EF4444; border-radius: 9px; padding: 9px 18px; font-weight: 700; font-size: 13px; min-height: 20px; }
+    button.btn-ghost { background-color: #0E172A; color: #E2E8F0; border: 1px solid #2A4369; border-radius: 9px; padding: 9px 16px; font-weight: 600; font-size: 13px; min-height: 20px; }
+    button.btn-ghost:hover { background-color: #172542; border-color: #22D3EE; color: #FFFFFF; }
+    entry, combobox button.combo { background-color: #070C17; color: #F1F5F9; border: 1px solid #263D61; border-radius: 9px; padding: 9px 12px; min-height: 20px; }
     entry:focus { border-color: #22D3EE; }
-    progressbar trough { background-color: #101A2F; border-radius: 6px; min-height: 9px; }
-    progressbar progress { background-image: linear-gradient(90deg, #22D3EE, #3B82F6, #8B5CF6); border-radius: 6px; min-height: 9px; }
-    listbox { background-color: transparent; }
-    listbox row { background-color: transparent; padding: 3px 0px; }
+    progressbar trough { background-color: #0B1220; border-radius: 6px; min-height: 10px; border: 1px solid #1E314F; }
+    progressbar progress { background-image: linear-gradient(90deg, #22D3EE, #3B82F6, #8B5CF6); border-radius: 6px; min-height: 10px; }
     """
     try:
         provider = Gtk.CssProvider()
         provider.load_from_data(css)
-        screen = Gdk.Screen.get_default()
-        if screen is not None:
-            Gtk.StyleContext.add_provider_for_screen(screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        Gtk.StyleContext.add_provider_for_screen(Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
     except Exception as exc:
-        log_msg(f"GTK CSS warning (ignorado): {exc}")
+        log_msg(f"CSS load aviso: {exc}")
 
-    event_queue = queue.Queue()
-    client = ContinuumMeshClient(cfg, event_queue, start_hub=start_hub)
+    events = queue.Queue()
+    client = ContinuumMeshClient(cfg, events, start_hub=start_hub)
 
-    win = Gtk.Window(title=f"Continuum {APP_VERSION} — Malha Holográfica LAN")
-    win.set_default_size(1160, 740)
+    win = Gtk.Window(title="Continuum")
+    win.set_default_size(1220, 780)
+    win.set_size_request(940, 620)
     win.set_position(Gtk.WindowPosition.CENTER)
     win.get_style_context().add_class("root-bg")
 
     state = {
         "devices": [],
         "selected_id": None,
-        "lan_peers": [],
-        "active_tab": "map",
+        "drag_id": None,
+        "drag_off": (0, 0),
         "scanning": False,
         "scan_pct": 0,
         "phase": 0.0,
-        "drag_dev_id": None,
-        "drag_offset": (0.0, 0.0),
-        "tp_last": None,
-        "tp_moved": False,
-        "tp_cursor": None,
-        "tp_trail": [],
-        "tp_ripples": [],
-        "file_history": [],
+        "last_frame": time.monotonic(),
+        "track_last": None,
+        "track_cursor": None,
+        "track_moved": False,
+        "track_trail": [],
+        "track_ripples": [],
+        "lan_peers": [],
+        "streaming_out": False,
+        "stream_target_id": None,
+        "stream_mon_idx": 0,
+        "stream_fps": 15,
+        "stream_quality": 65,
+        "stream_seq": 0,
+        "rx_pixbuf": None,
+        "auto_clip": bool(cfg.get("autoClipboard", True)),
+        "last_clip_text": "",
+        "kvm_capture_active": False,
+        "kvm_edge_enabled": bool(cfg.get("kvmEdgeEnabled", False)),
+        "kvm_edge_side": str(cfg.get("kvmEdgeSide", "right")),
+        "kvm_edge_locked": False,
     }
-
-    root_hbox = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
-    win.add(root_hbox)
-
-    # ==================== LEFT SIDEBAR ====================
-    sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
-    sidebar.set_size_request(242, -1)
-    sidebar.get_style_context().add_class("sidebar")
-    sidebar.set_border_width(14)
-    root_hbox.pack_start(sidebar, False, False, 0)
-
-    brand_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-    lbl_brand = Gtk.Label(label="CONTINUUM")
-    lbl_brand.set_xalign(0)
-    lbl_brand.get_style_context().add_class("brand-title")
-    lbl_sub = Gtk.Label(label=f"v{APP_VERSION} · Spatial LAN Mesh")
-    lbl_sub.set_xalign(0)
-    lbl_sub.get_style_context().add_class("brand-sub")
-    brand_box.pack_start(lbl_brand, False, False, 0)
-    brand_box.pack_start(lbl_sub, False, False, 0)
-    sidebar.pack_start(brand_box, False, False, 6)
-
-    nav_buttons = {}
-    nav_items = [
-        ("map", "Mapa Holográfico"),
-        ("remote", "Trackpad & Controle"),
-        ("transfer", "Arquivos & Clipboard"),
-        ("network", "Radar LAN & Alertas"),
-    ]
-
-    main_vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-    root_hbox.pack_start(main_vbox, True, True, 0)
-
-    # Top Header Bar
-    topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    topbar.get_style_context().add_class("topbar")
-    topbar.set_border_width(12)
-    main_vbox.pack_start(topbar, False, False, 0)
-
-    lbl_page_title = Gtk.Label(label="Mapa Espacial Holográfico")
-    lbl_page_title.get_style_context().add_class("section-title")
-    lbl_page_title.set_xalign(0)
-    topbar.pack_start(lbl_page_title, True, True, 0)
-
-    lbl_conn_status = Gtk.Label(label="◌ Inicializando Radar LAN...")
-    lbl_conn_status.get_style_context().add_class("status-cyan")
-    topbar.pack_start(lbl_conn_status, False, False, 6)
-
-    btn_scan_top = Gtk.Button(label="Escanear Wi-Fi")
-    btn_scan_top.get_style_context().add_class("btn-primary")
-    btn_scan_top.connect("clicked", lambda _w: client.discovery.scan_subnet_tcp())
-    topbar.pack_start(btn_scan_top, False, False, 0)
-
-    entry_room_top = Gtk.Entry()
-    entry_room_top.set_text(cfg.get("roomCode", DEFAULT_ROOM_CODE))
-    entry_room_top.set_width_chars(8)
-    topbar.pack_start(entry_room_top, False, False, 0)
-
-    btn_apply_room = Gtk.Button(label="Malha")
-    btn_apply_room.get_style_context().add_class("btn-secondary")
-    topbar.pack_start(btn_apply_room, False, False, 0)
-
-    stack = Gtk.Stack()
-    stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
-    stack.set_transition_duration(180)
-    main_vbox.pack_start(stack, True, True, 0)
-
-    page_titles = {
-        "map": "Mapa Espacial Holográfico",
-        "remote": "Superfície Tátil Holográfica & Mídia",
-        "transfer": "Arquivos LAN & Área de Transferência",
-        "network": "Radar Wi-Fi P2P & Alertas",
-    }
-
-    def switch_tab(tab_key):
-        state["active_tab"] = tab_key
-        stack.set_visible_child_name(tab_key)
-        lbl_page_title.set_text(page_titles.get(tab_key, "Continuum"))
-        for k, b in nav_buttons.items():
-            ctx_b = b.get_style_context()
-            if k == tab_key:
-                ctx_b.remove_class("nav-btn")
-                ctx_b.add_class("nav-btn-active")
-            else:
-                ctx_b.remove_class("nav-btn-active")
-                ctx_b.add_class("nav-btn")
-
-    for key, label in nav_items:
-        btn = Gtk.Button(label=label)
-        btn.get_child().set_xalign(0)
-        btn.get_style_context().add_class("nav-btn")
-        btn.connect("clicked", lambda _w, k=key: switch_tab(k))
-        sidebar.pack_start(btn, False, False, 2)
-        nav_buttons[key] = btn
-
-    sidebar.pack_start(Gtk.Box(), True, True, 0)
-
-    # Sidebar bottom Holographic Hub Card
-    hub_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=5)
-    hub_card.get_style_context().add_class("card-subtle")
-    hub_card.set_border_width(11)
-    lbl_hub_h = Gtk.Label(label="HUB LAN EMBUTIDO")
-    lbl_hub_h.set_xalign(0)
-    lbl_hub_h.get_style_context().add_class("brand-sub")
-    lan_endpoint_str = f"{get_local_lan_ip()}:{client.hub.port}"
-    lbl_hub_ip = Gtk.Label(label=lan_endpoint_str)
-    lbl_hub_ip.set_xalign(0)
-    lbl_hub_ip.set_selectable(True)
-    lbl_hub_ip.get_style_context().add_class("mono")
-    lbl_hub_meta = Gtk.Label(label=f"Malha {cfg.get('roomCode', DEFAULT_ROOM_CODE)} · 1 nó")
-    lbl_hub_meta.set_xalign(0)
-    lbl_hub_meta.get_style_context().add_class("muted")
-    btn_copy_ip = Gtk.Button(label="Copiar Endereço LAN")
-    btn_copy_ip.get_style_context().add_class("btn-secondary")
-    btn_copy_ip.connect("clicked", lambda _w: (
-        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(f"{get_local_lan_ip()}:{client.hub.port}", -1),
-        show_toast(f"Endereço {get_local_lan_ip()}:{client.hub.port} copiado!")
-    ))
-    hub_card.pack_start(lbl_hub_h, False, False, 0)
-    hub_card.pack_start(lbl_hub_ip, False, False, 0)
-    hub_card.pack_start(lbl_hub_meta, False, False, 0)
-    hub_card.pack_start(btn_copy_ip, False, False, 2)
-    sidebar.pack_end(hub_card, False, False, 0)
-
-    toast_label = Gtk.Label(label="")
-    toast_label.set_xalign(0)
-    toast_label.get_style_context().add_class("muted")
-    toast_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    toast_box.set_border_width(7)
-    toast_box.pack_start(toast_label, True, True, 8)
-    main_vbox.pack_end(toast_box, False, False, 0)
-
-    def show_toast(text):
-        toast_label.set_text(text)
 
     def get_target_device():
         devs = state["devices"]
         if state["selected_id"]:
             for d in devs:
-                if d.get("id") == state["selected_id"]:
+                if d.get("id") == state["selected_id"] and d.get("id") != DEVICE_ID:
                     return d
         for d in devs:
             if d.get("id") != DEVICE_ID:
                 return d
         return devs[0] if devs else None
 
-    # ==================== TAB 1: HOLOGRAPHIC SPATIAL MAP (CAIRO 60FPS) ====================
-    tab_map = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    tab_map.set_border_width(14)
+    def send_remote(ev):
+        tgt = get_target_device()
+        if not tgt or tgt.get("id") == DEVICE_ID:
+            return
+        client.send({"type": "input:event", "targetDeviceId": tgt["id"], "event": ev})
 
-    map_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-    map_frame.get_style_context().add_class("card")
+    def get_monitors():
+        mons = []
+        try:
+            disp = Gdk.Display.get_default()
+            n = disp.get_n_monitors()
+            for i in range(n):
+                m = disp.get_monitor(i)
+                g = m.get_geometry()
+                name = m.get_model() or f"Monitor {i + 1}"
+                mons.append({"idx": i, "label": f"Monitor {i + 1} — {name} ({g.width}×{g.height})", "x": g.x, "y": g.y, "w": g.width, "h": g.height})
+        except Exception:
+            pass
+        if not mons:
+            mons.append({"idx": 0, "label": "Tela Principal (1920×1080)", "x": 0, "y": 0, "w": 1920, "h": 1080})
+        return mons
+
+    monitors = get_monitors()
+    if monitors:
+        _active_mon_geom.update({"x": monitors[0]["x"], "y": monitors[0]["y"], "w": monitors[0]["w"], "h": monitors[0]["h"]})
+
+    # ==================== ROOT SHELL (252px SIDEBAR + MAIN) ====================
+    root = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=0)
+    win.add(root)
+
+    sidebar = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    sidebar.set_size_request(252, -1)
+    sidebar.get_style_context().add_class("sidebar")
+    sidebar.set_margin_start(0)
+    root.pack_start(sidebar, False, False, 0)
+
+    brand_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+    brand_box.set_margin_top(18)
+    brand_box.set_margin_bottom(14)
+    brand_box.set_margin_start(20)
+    brand_box.set_margin_end(20)
+    lbl_brand = Gtk.Label(label="Continuum")
+    lbl_brand.set_xalign(0)
+    lbl_brand.get_style_context().add_class("brand-title")
+    lbl_bsub = Gtk.Label(label=f"Malha Nativa v{APP_VERSION}")
+    lbl_bsub.set_xalign(0)
+    lbl_bsub.get_style_context().add_class("brand-sub")
+    brand_box.pack_start(lbl_brand, False, False, 0)
+    brand_box.pack_start(lbl_bsub, False, False, 0)
+    sidebar.pack_start(brand_box, False, False, 0)
+    sidebar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+
+    nav_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    nav_box.set_margin_top(12)
+    nav_box.set_margin_start(14)
+    nav_box.set_margin_end(14)
+    sidebar.pack_start(nav_box, True, True, 0)
+
+    nav_defs = [
+        ("map", "Mapa Espacial"),
+        ("screen", "Extensão de Tela"),
+        ("remote", "Mouse & Teclado"),
+        ("transfer", "Clipboard & Arquivos"),
+        ("network", "Rede & Sistema"),
+    ]
+    nav_buttons = {}
+    stack = Gtk.Stack()
+    stack.set_transition_type(Gtk.StackTransitionType.CROSSFADE)
+    stack.set_transition_duration(150)
+
+    lbl_top_title = Gtk.Label(label="Continuum  /  Mapa Espacial")
+    lbl_top_title.set_xalign(0)
+    lbl_top_title.get_style_context().add_class("page-title")
+
+    def switch_page(key):
+        stack.set_visible_child_name(key)
+        for k, b in nav_buttons.items():
+            sc = b.get_style_context()
+            sc.remove_class("nav-btn-active")
+            sc.remove_class("nav-btn")
+            sc.add_class("nav-btn-active" if k == key else "nav-btn")
+        for k, title in nav_defs:
+            if k == key:
+                lbl_top_title.set_text(f"Continuum  /  {title}")
+
+    for key, title in nav_defs:
+        b = Gtk.Button(label=title)
+        b.set_alignment(0.0, 0.5)
+        b.get_style_context().add_class("nav-btn")
+        b.connect("clicked", lambda _w, k=key: switch_page(k))
+        nav_box.pack_start(b, False, False, 0)
+        nav_buttons[key] = b
+
+    # Sidebar Connection Footer (Clean unboxed typography matching Web App)
+    sidebar.pack_start(Gtk.Separator(orientation=Gtk.Orientation.HORIZONTAL), False, False, 0)
+    foot = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    foot.set_margin_top(14)
+    foot.set_margin_bottom(16)
+    foot.set_margin_start(18)
+    foot.set_margin_end(18)
+
+    lbl_side_status = Gtk.Label(label="Iniciando Hub LAN...")
+    lbl_side_status.set_xalign(0)
+    lbl_side_status.set_line_wrap(True)
+    lbl_side_status.get_style_context().add_class("status-warn")
+
+    lbl_side_room = Gtk.Label(label=f"Malha: {cfg.get('roomCode', DEFAULT_ROOM_CODE)}")
+    lbl_side_room.set_xalign(0)
+    lbl_side_room.get_style_context().add_class("mono")
+
+    lbl_side_ip = Gtk.Label(label=f"IP: {get_local_lan_ip()}:{LAN_WS_PORT}")
+    lbl_side_ip.set_xalign(0)
+    lbl_side_ip.get_style_context().add_class("muted")
+
+    lbl_side_count = Gtk.Label(label="1 dispositivo online")
+    lbl_side_count.set_xalign(0)
+    lbl_side_count.get_style_context().add_class("muted")
+
+    foot.pack_start(lbl_side_status, False, False, 0)
+    foot.pack_start(lbl_side_room, False, False, 0)
+    foot.pack_start(lbl_side_ip, False, False, 0)
+    foot.pack_start(lbl_side_count, False, False, 0)
+    sidebar.pack_end(foot, False, False, 0)
+
+    # ==================== MAIN RIGHT COLUMN ====================
+    main_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
+    root.pack_start(main_col, True, True, 0)
+
+    topbar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=14)
+    topbar.set_size_request(-1, 58)
+    topbar.get_style_context().add_class("topbar")
+    topbar.set_border_width(10)
+    lbl_top_title.set_margin_start(10)
+    topbar.pack_start(lbl_top_title, True, True, 0)
+
+    lbl_top_rtt = Gtk.Label(label="LAN Direta")
+    lbl_top_rtt.get_style_context().add_class("mono")
+    topbar.pack_start(lbl_top_rtt, False, False, 0)
+
+    btn_top_scan = Gtk.Button(label="Escanear Wi-Fi")
+    btn_top_scan.get_style_context().add_class("btn-primary")
+    btn_top_scan.connect("clicked", lambda _w: client.discovery.scan_subnet_tcp())
+    topbar.pack_start(btn_top_scan, False, False, 4)
+
+    main_col.pack_start(topbar, False, False, 0)
+    main_col.pack_start(stack, True, True, 0)
+
+    def make_card(pad=18, spacing=12):
+        b = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=spacing)
+        b.get_style_context().add_class("card")
+        b.set_border_width(pad)
+        return b
+
+    def make_scrolled_page():
+        sc = Gtk.ScrolledWindow()
+        sc.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
+        inner = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16)
+        inner.set_margin_top(20)
+        inner.set_margin_bottom(24)
+        inner.set_margin_start(22)
+        inner.set_margin_end(22)
+        sc.add(inner)
+        return sc, inner
+
+    # ==================== VIEW 1: MAPA ESPACIAL HOLOGRÁFICO ====================
+    map_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+    map_page.set_margin_top(18)
+    map_page.set_margin_bottom(18)
+    map_page.set_margin_start(20)
+    map_page.set_margin_end(20)
+
     map_canvas = Gtk.DrawingArea()
-    map_canvas.set_size_request(660, 450)
+    map_canvas.set_hexpand(True)
+    map_canvas.set_vexpand(True)
     map_canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
+    map_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    map_frame.get_style_context().add_class("card")
     map_frame.pack_start(map_canvas, True, True, 0)
-    tab_map.pack_start(map_frame, True, True, 0)
+    map_page.pack_start(map_frame, True, True, 0)
 
-    sel_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    sel_bar.get_style_context().add_class("card")
-    sel_bar.set_border_width(12)
-    lbl_selected = Gtk.Label(label="Radar holográfico ativo · Arraste dispositivos para posicionar no espaço.")
-    lbl_selected.set_xalign(0)
-    lbl_selected.get_style_context().add_class("muted")
-    sel_bar.pack_start(lbl_selected, True, True, 0)
-
-    btn_sel_ctrl = Gtk.Button(label="Controlar")
-    btn_sel_ctrl.get_style_context().add_class("btn-primary")
-    btn_sel_ping = Gtk.Button(label="Localizar")
-    btn_sel_ping.get_style_context().add_class("btn-secondary")
-    btn_sel_file = Gtk.Button(label="Enviar Arquivo")
-    btn_sel_file.get_style_context().add_class("btn-secondary")
-    sel_bar.pack_start(btn_sel_ctrl, False, False, 0)
-    sel_bar.pack_start(btn_sel_ping, False, False, 0)
-    sel_bar.pack_start(btn_sel_file, False, False, 0)
-    tab_map.pack_start(sel_bar, False, False, 0)
-
-    NODE_W = 212.0
-    NODE_H = 116.0
-
-    def node_rect(dev, idx):
-        x = float(dev.get("x", 180 + (idx % 3) * 240))
-        y = float(dev.get("y", 140 + (idx // 3) * 175))
-        return (x - NODE_W / 2.0, y - NODE_H / 2.0, NODE_W, NODE_H, x, y)
+    NODE_W, NODE_H = 224, 118
 
     def draw_radial_gauge(cr, cx, cy, rad, pct, label, rgb):
         cr.set_line_width(3.4)
-        cr.set_source_rgba(0.14, 0.22, 0.36, 0.8)
+        cr.set_source_rgba(0.12, 0.20, 0.33, 0.72)
         cr.arc(cx, cy, rad, 0, 2 * math.pi)
         cr.stroke()
-        if pct > 0:
-            cr.set_source_rgb(*rgb)
-            cr.arc(cx, cy, rad, -math.pi / 2.0, -math.pi / 2.0 + (min(100, pct) / 100.0) * 2 * math.pi)
+        sweep = (max(0, min(100, pct)) / 100.0) * 2 * math.pi
+        if sweep > 0:
+            cr.set_line_cap(cairo.LINE_CAP_ROUND)
+            cr.set_source_rgba(rgb[0], rgb[1], rgb[2], 0.96)
+            cr.arc(cx, cy, rad, -math.pi / 2, -math.pi / 2 + sweep)
             cr.stroke()
-        cr.set_source_rgb(0.95, 0.97, 1.0)
-        cr.select_font_face("Monospace", 0, 1)
+        cr.select_font_face("Monospace", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
         cr.set_font_size(9.5)
         txt = f"{pct}%"
         ext = cr.text_extents(txt)
-        cr.move_to(cx - ext.width / 2.0, cy + 3.5)
+        cr.set_source_rgb(0.95, 0.97, 0.99)
+        cr.move_to(cx - ext.width / 2, cy + ext.height / 2)
         cr.show_text(txt)
-        cr.set_source_rgb(0.55, 0.64, 0.77)
-        cr.select_font_face("Sans", 0, 0)
+        cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
         cr.set_font_size(9.5)
-        cr.move_to(cx + rad + 6, cy + 3.5)
+        cr.set_source_rgb(0.58, 0.65, 0.76)
+        cr.move_to(cx + rad + 8, cy + 3.5)
         cr.show_text(label)
 
-    def draw_spatial_map(widget, cr):
+    def on_map_draw(widget, cr):
         alloc = widget.get_allocation()
-        w, h = float(alloc.width), float(alloc.height)
+        w, h = max(1, alloc.width), max(1, alloc.height)
         cx, cy = w / 2.0, h / 2.0
-        ph = state["phase"]
+        max_r = min(w, h) * 0.44
 
-        # 1. Deep Space Radial Gradient
-        bg = cairo.RadialGradient(cx, cy, 10, cx, cy, max(w, h) * 0.75)
-        bg.add_color_stop_rgb(0.0, 0.051, 0.094, 0.176)
-        bg.add_color_stop_rgb(1.0, 0.020, 0.031, 0.063)
-        cr.set_source(bg)
+        bg_pat = cairo.RadialGradient(cx, cy, 10, cx, cy, max(w, h) * 0.75)
+        bg_pat.add_color_stop_rgb(0, 0.055, 0.098, 0.18)
+        bg_pat.add_color_stop_rgb(1, 0.024, 0.039, 0.075)
+        cr.set_source(bg_pat)
         cr.rectangle(0, 0, w, h)
         cr.fill()
 
-        # 2. Holographic Crosshair Matrix
-        cr.set_source_rgba(0.133, 0.827, 0.933, 0.22)
+        cr.set_source_rgba(0.13, 0.83, 0.93, 0.16)
         cr.set_line_width(1.0)
-        for gx in range(32, int(w), 36):
-            for gy in range(32, int(h), 36):
-                cr.move_to(gx - 2.5, gy)
-                cr.line_to(gx + 2.5, gy)
-                cr.move_to(gx, gy - 2.5)
-                cr.line_to(gx, gy + 2.5)
+        for gx in range(36, w, 40):
+            for gy in range(36, h, 40):
+                cr.move_to(gx - 2.5, gy); cr.line_to(gx + 2.5, gy)
+                cr.move_to(gx, gy - 2.5); cr.line_to(gx, gy + 2.5)
         cr.stroke()
 
-        # 3. Concentric Holographic Radar Rings & Sweeping Beam
-        max_r = min(w, h) * 0.44
+        phase = state["phase"]
         for i in range(1, 4):
-            cr.set_source_rgba(0.133, 0.827, 0.933, 0.16 if state["scanning"] else 0.08)
+            cr.set_source_rgba(0.13, 0.83, 0.93, 0.18 if state["scanning"] else 0.08)
             cr.set_line_width(1.1)
             cr.arc(cx, cy, max_r * (i / 3.0), 0, 2 * math.pi)
             cr.stroke()
-        pulse_t = (ph * 0.45) % 1.0
-        cr.set_source_rgba(0.133, 0.827, 0.933, (1.0 - pulse_t) * (0.45 if state["scanning"] else 0.22))
-        cr.set_line_width(1.6)
+        pulse_t = (phase * 0.45) % 1.0
+        cr.set_source_rgba(0.13, 0.83, 0.93, (1.0 - pulse_t) * (0.45 if state["scanning"] else 0.22))
+        cr.set_line_width(1.5)
         cr.arc(cx, cy, pulse_t * max_r, 0, 2 * math.pi)
         cr.stroke()
 
         if state["scanning"] or len(state["devices"]) <= 1:
-            sweep_a = (ph * 2.1) % (2 * math.pi)
-            cr.save()
+            ang = (phase * 1.8) % (2 * math.pi)
+            cr.new_path()
             cr.move_to(cx, cy)
-            cr.arc(cx, cy, max_r, sweep_a - 0.65, sweep_a)
+            cr.arc(cx, cy, max_r, ang - 0.55, ang)
             cr.close_path()
-            cr.set_source_rgba(0.133, 0.827, 0.933, 0.14)
+            cr.set_source_rgba(0.13, 0.83, 0.93, 0.12)
             cr.fill()
-            cr.set_source_rgba(0.133, 0.827, 0.933, 0.65)
-            cr.set_line_width(1.6)
+            cr.set_source_rgba(0.13, 0.83, 0.93, 0.65)
+            cr.set_line_width(1.5)
             cr.move_to(cx, cy)
-            cr.line_to(cx + math.cos(sweep_a) * max_r, cy + math.sin(sweep_a) * max_r)
+            cr.line_to(cx + math.cos(ang) * max_r, cy + math.sin(ang) * max_r)
             cr.stroke()
-            cr.restore()
 
         devs = state["devices"]
         if not devs:
-            cr.set_source_rgba(0.133, 0.827, 0.933, 0.85)
-            cr.select_font_face("Sans", 0, 1)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
             cr.set_font_size(13)
-            msg = f"Radar Holográfico escaneando rede local... {state['scan_pct']}%" if state["scanning"] else "Aguardando dispositivos na rede Wi-Fi..."
+            cr.set_source_rgba(0.13, 0.83, 0.93, 0.9)
+            msg = f"Radar escaneando Wi-Fi... {state['scan_pct']}%" if state["scanning"] else "Aguardando dispositivos na rede Wi-Fi..."
             ext = cr.text_extents(msg)
-            cr.move_to((w - ext.width) / 2.0, cy + max_r * 0.55)
+            cr.move_to(cx - ext.width / 2, cy + max_r * 0.52)
             cr.show_text(msg)
-            return False
+            return
 
-        # 4. Glowing Bezier Links + Animated Energy Data Packets
         anchor = next((d for d in devs if d.get("id") == DEVICE_ID), devs[0])
-        ax, ay = float(anchor.get("x", 180)), float(anchor.get("y", 140))
-        for idx, d in enumerate(devs):
+        ax, ay = float(anchor.get("x", 220)), float(anchor.get("y", 180))
+        for d in devs:
             if d.get("id") == anchor.get("id"):
                 continue
-            _, _, _, _, dx, dy = node_rect(d, idx)
-            mx = (ax + dx) / 2.0
+            dx, dy = float(d.get("x", 480)), float(d.get("y", 180))
             is_sel = d.get("id") == state["selected_id"]
+            mx = (ax + dx) / 2.0
+            lp = cairo.LinearGradient(ax, ay, dx, dy)
+            lp.add_color_stop_rgba(0, 0.13, 0.83, 0.93, 0.36 if is_sel else 0.18)
+            lp.add_color_stop_rgba(1, 0.55, 0.36, 0.96, 0.36 if is_sel else 0.18)
+            cr.set_source(lp)
+            cr.set_line_width(6.5 if is_sel else 3.5)
+            cr.move_to(ax, ay); cr.curve_to(mx, ay, mx, dy, dx, dy); cr.stroke()
 
-            lg = cairo.LinearGradient(ax, ay, dx, dy)
-            lg.add_color_stop_rgba(0.0, 0.133, 0.827, 0.933, 0.35 if is_sel else 0.18)
-            lg.add_color_stop_rgba(1.0, 0.545, 0.361, 0.965, 0.35 if is_sel else 0.18)
-            cr.set_source(lg)
-            cr.set_line_width(7.0 if is_sel else 4.0)
-            cr.move_to(ax, ay)
-            cr.curve_to(mx, ay, mx, dy, dx, dy)
-            cr.stroke()
-
-            lg2 = cairo.LinearGradient(ax, ay, dx, dy)
-            lg2.add_color_stop_rgba(0.0, 0.133, 0.827, 0.933, 0.95 if is_sel else 0.65)
-            lg2.add_color_stop_rgba(1.0, 0.545, 0.361, 0.965, 0.95 if is_sel else 0.65)
-            cr.set_source(lg2)
-            cr.set_line_width(2.0 if is_sel else 1.4)
-            cr.move_to(ax, ay)
-            cr.curve_to(mx, ay, mx, dy, dx, dy)
-            cr.stroke()
+            lp2 = cairo.LinearGradient(ax, ay, dx, dy)
+            lp2.add_color_stop_rgba(0, 0.13, 0.83, 0.93, 0.92 if is_sel else 0.58)
+            lp2.add_color_stop_rgba(1, 0.55, 0.36, 0.96, 0.92 if is_sel else 0.58)
+            cr.set_source(lp2)
+            cr.set_line_width(2.0 if is_sel else 1.3)
+            cr.move_to(ax, ay); cr.curve_to(mx, ay, mx, dy, dx, dy); cr.stroke()
 
             for k in range(2):
-                t = (ph * 0.55 + k * 0.5) % 1.0
+                t = (phase * 0.55 + k * 0.5) % 1.0
                 px, py = cubic_pt(t, ax, ay, mx, ay, mx, dy, dx, dy)
-                cr.set_source_rgba(0.133, 0.827, 0.933, 0.35)
-                cr.arc(px, py, 6.0, 0, 2 * math.pi)
-                cr.fill()
-                cr.set_source_rgb(1.0, 1.0, 1.0)
-                cr.arc(px, py, 2.2, 0, 2 * math.pi)
-                cr.fill()
+                cr.set_source_rgba(0.13, 0.83, 0.93, 0.35)
+                cr.arc(px, py, 6.0, 0, 2 * math.pi); cr.fill()
+                cr.set_source_rgba(1.0, 1.0, 1.0, 0.95)
+                cr.arc(px, py, 2.2, 0, 2 * math.pi); cr.fill()
 
-        # 5. Frosted Holographic Device Cards
-        for idx, d in enumerate(devs):
-            rx, ry, rw, rh, ncx, ncy = node_rect(d, idx)
+        for d in devs:
+            nx, ny = float(d.get("x", 220)), float(d.get("y", 180))
+            rx, ry = nx - NODE_W / 2, ny - NODE_H / 2
             is_self = d.get("id") == DEVICE_ID
             is_sel = d.get("id") == state["selected_id"]
-            os_name = str(d.get("os", "linux")).lower()
             tel = d.get("telemetry") or {}
             cpu = int(tel.get("cpuUsage") or 0)
             ram = int(tel.get("memoryUsagePercent") or 0)
             bat = tel.get("batteryLevel")
 
             if is_sel or is_self:
-                cairo_rounded_rect(cr, rx - 1.5, ry - 1.5, rw + 3.0, rh + 3.0, 14.0)
-                cr.set_source_rgba(0.133, 0.827, 0.933, 0.28) if is_sel else cr.set_source_rgba(0.063, 0.725, 0.506, 0.22)
-                cr.set_line_width(6.0)
-                cr.stroke()
+                cairo_rounded_rect(cr, rx - 2, ry - 2, NODE_W + 4, NODE_H + 4, 14)
+                cr.set_source_rgba(0.13, 0.83, 0.93, 0.24) if is_sel else cr.set_source_rgba(0.06, 0.72, 0.50, 0.20)
+                cr.set_line_width(5.0); cr.stroke()
 
-            cairo_rounded_rect(cr, rx, ry, rw, rh, 13.0)
-            fill_g = cairo.LinearGradient(rx, ry, rx + rw, ry + rh)
+            cairo_rounded_rect(cr, rx, ry, NODE_W, NODE_H, 12)
+            cp = cairo.LinearGradient(rx, ry, rx + NODE_W, ry + NODE_H)
             if is_sel:
-                fill_g.add_color_stop_rgba(0.0, 0.086, 0.141, 0.243, 0.93)
-                fill_g.add_color_stop_rgba(1.0, 0.039, 0.059, 0.110, 0.95)
+                cp.add_color_stop_rgba(0, 0.085, 0.145, 0.255, 0.94)
+                cp.add_color_stop_rgba(1, 0.045, 0.075, 0.145, 0.96)
             else:
-                fill_g.add_color_stop_rgba(0.0, 0.059, 0.090, 0.157, 0.90)
-                fill_g.add_color_stop_rgba(1.0, 0.035, 0.051, 0.094, 0.92)
-            cr.set_source(fill_g)
-            cr.fill_preserve()
+                cp.add_color_stop_rgba(0, 0.060, 0.095, 0.175, 0.92)
+                cp.add_color_stop_rgba(1, 0.038, 0.060, 0.115, 0.95)
+            cr.set_source(cp); cr.fill_preserve()
 
-            border_g = cairo.LinearGradient(rx, ry, rx + rw, ry + rh)
+            bp = cairo.LinearGradient(rx, ry, rx + NODE_W, ry + NODE_H)
             if is_sel:
-                border_g.add_color_stop_rgb(0.0, 0.133, 0.827, 0.933)
-                border_g.add_color_stop_rgb(0.5, 0.231, 0.510, 0.965)
-                border_g.add_color_stop_rgb(1.0, 0.545, 0.361, 0.965)
-                cr.set_line_width(1.9)
+                bp.add_color_stop_rgb(0, 0.13, 0.83, 0.93)
+                bp.add_color_stop_rgb(1, 0.55, 0.36, 0.96)
             elif is_self:
-                border_g.add_color_stop_rgb(0.0, 0.063, 0.725, 0.506)
-                border_g.add_color_stop_rgb(1.0, 0.133, 0.827, 0.933)
-                cr.set_line_width(1.5)
+                bp.add_color_stop_rgb(0, 0.06, 0.72, 0.50)
+                bp.add_color_stop_rgb(1, 0.13, 0.83, 0.93)
             else:
-                border_g.add_color_stop_rgb(0.0, 0.165, 0.282, 0.439)
-                border_g.add_color_stop_rgb(1.0, 0.110, 0.176, 0.302)
-                cr.set_line_width(1.1)
-            cr.set_source(border_g)
+                bp.add_color_stop_rgb(0, 0.18, 0.30, 0.46)
+                bp.add_color_stop_rgb(1, 0.11, 0.18, 0.30)
+            cr.set_source(bp)
+            cr.set_line_width(2.0 if is_sel else 1.2)
             cr.stroke()
 
-            # Hardware silhouette glyph
-            ix, iy = rx + 14, ry + 14
-            cr.set_source_rgb(0.133, 0.827, 0.933) if is_sel else (cr.set_source_rgb(0.063, 0.725, 0.506) if is_self else cr.set_source_rgb(0.376, 0.647, 0.980))
-            cr.set_line_width(1.5)
+            os_name = str(d.get("os") or "peer").lower()
+            cr.set_source_rgb(0.13, 0.83, 0.93) if is_sel else (cr.set_source_rgb(0.06, 0.72, 0.50) if is_self else cr.set_source_rgb(0.38, 0.65, 0.98))
+            cr.set_line_width(1.6)
             if os_name in ("android", "ios"):
-                cairo_rounded_rect(cr, ix, iy, 12, 19, 2.5)
-                cr.stroke()
+                cairo_rounded_rect(cr, rx + 14, ry + 14, 12, 19, 2.5); cr.stroke()
             else:
-                cairo_rounded_rect(cr, ix, iy, 18, 13, 2.0)
-                cr.stroke()
-                cr.move_to(ix + 5, iy + 16)
-                cr.line_to(ix + 13, iy + 16)
-                cr.stroke()
+                cairo_rounded_rect(cr, rx + 12, ry + 14, 18, 13, 2.0); cr.stroke()
+                cr.move_to(rx + 16, ry + 30); cr.line_to(rx + 26, ry + 30); cr.stroke()
 
-            cr.set_source_rgb(0.95, 0.97, 1.0)
-            cr.select_font_face("Sans", 0, 1)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
             cr.set_font_size(12.5)
-            cr.move_to(rx + 40, ry + 24)
-            cr.show_text(str(d.get("name") or "Dispositivo")[:18])
+            cr.set_source_rgb(0.95, 0.97, 0.99)
+            cr.move_to(rx + 38, ry + 26)
+            cr.show_text(str(d.get("name") or "Peer")[:20])
 
-            cr.set_source_rgb(0.55, 0.64, 0.77)
-            cr.select_font_face("Sans", 0, 0)
-            cr.set_font_size(10)
-            role_txt = "Este PC" if is_self else ("Alvo Ativo" if is_sel else "LAN Direta")
-            sub = f"{os_name.upper()} · {role_txt}" + (f" · {bat}%" if bat is not None else "")
-            cr.move_to(rx + 40, ry + 39)
-            cr.show_text(sub)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(10.5)
+            cr.set_source_rgb(0.58, 0.66, 0.77)
+            role = "Este PC" if is_self else ("Alvo Ativo" if is_sel else "LAN Direta")
+            bat_str = f" · {bat}%" if bat is not None else ""
+            cr.move_to(rx + 38, ry + 42)
+            cr.show_text(f"{os_name.upper()} · {role}{bat_str}")
 
-            draw_radial_gauge(cr, rx + 42, ry + 80, 18.0, cpu, "CPU", (0.133, 0.827, 0.933))
-            draw_radial_gauge(cr, rx + 132, ry + 80, 18.0, ram, "RAM", (0.545, 0.361, 0.965))
-
-        return False
-
-    def update_selected_bar():
-        tgt = get_target_device()
-        if tgt:
-            tel = tgt.get("telemetry") or {}
-            lbl_selected.set_text(
-                f"Alvo ativo: {tgt.get('name')} ({str(tgt.get('os', '')).upper()}) · CPU {tel.get('cpuUsage', 0)}% · RAM {tel.get('memoryUsagePercent', 0)}%"
-            )
-            lbl_remote_target.set_text(f"Controlando: {tgt.get('name')} ({str(tgt.get('os', '')).upper()})")
-        else:
-            lbl_selected.set_text("Radar holográfico ativo · Abra o Continuum no Android ou Windows na mesma rede Wi-Fi.")
-            lbl_remote_target.set_text("Alvo: aguardando dispositivo...")
+            draw_radial_gauge(cr, rx + 44, ry + 82, 17, cpu, "CPU", (0.13, 0.83, 0.93))
+            draw_radial_gauge(cr, rx + 136, ry + 82, 17, ram, "RAM", (0.55, 0.36, 0.96))
 
     def on_map_press(_w, ev):
-        devs = state["devices"]
-        for idx in range(len(devs) - 1, -1, -1):
-            d = devs[idx]
-            rx, ry, rw, rh, ncx, ncy = node_rect(d, idx)
-            if rx <= ev.x <= rx + rw and ry <= ev.y <= ry + rh:
+        for d in reversed(state["devices"]):
+            nx, ny = float(d.get("x", 220)), float(d.get("y", 180))
+            if abs(ev.x - nx) <= NODE_W / 2 and abs(ev.y - ny) <= NODE_H / 2:
                 state["selected_id"] = d.get("id")
-                state["drag_dev_id"] = d.get("id")
-                state["drag_offset"] = (ncx - ev.x, ncy - ev.y)
-                update_selected_bar()
+                state["drag_id"] = d.get("id")
+                state["drag_off"] = (nx - ev.x, ny - ev.y)
+                refresh_selected_bar()
                 map_canvas.queue_draw()
                 return True
         return False
 
-    def on_map_motion(_w, ev):
-        drag_id = state["drag_dev_id"]
-        if not drag_id:
+    def on_map_motion(widget, ev):
+        if not state["drag_id"]:
             return False
-        alloc = map_canvas.get_allocation()
-        nx = max(112.0, min(alloc.width - 112.0, ev.x + state["drag_offset"][0]))
-        ny = max(66.0, min(alloc.height - 66.0, ev.y + state["drag_offset"][1]))
+        alloc = widget.get_allocation()
         for d in state["devices"]:
-            if d.get("id") == drag_id:
-                d["x"] = nx
-                d["y"] = ny
-                break
-        map_canvas.queue_draw()
-        return True
+            if d.get("id") == state["drag_id"]:
+                d["x"] = max(NODE_W / 2 + 12, min(alloc.width - NODE_W / 2 - 12, ev.x + state["drag_off"][0]))
+                d["y"] = max(NODE_H / 2 + 12, min(alloc.height - NODE_H / 2 - 12, ev.y + state["drag_off"][1]))
+                map_canvas.queue_draw()
+                return True
+        return False
 
     def on_map_release(_w, _ev):
-        drag_id = state["drag_dev_id"]
-        state["drag_dev_id"] = None
-        if drag_id:
+        if state["drag_id"]:
+            did = state["drag_id"]
+            state["drag_id"] = None
             for d in state["devices"]:
-                if d.get("id") == drag_id:
-                    client.send({"type": "device:move", "deviceId": drag_id, "x": d.get("x", 180), "y": d.get("y", 140)})
-                    break
+                if d.get("id") == did:
+                    client.send({"type": "device:move", "deviceId": did, "x": d["x"], "y": d["y"]})
         return True
 
-    map_canvas.connect("draw", draw_spatial_map)
+    map_canvas.connect("draw", on_map_draw)
     map_canvas.connect("button-press-event", on_map_press)
     map_canvas.connect("motion-notify-event", on_map_motion)
     map_canvas.connect("button-release-event", on_map_release)
-    stack.add_named(tab_map, "map")
 
-    # ==================== TAB 2: HOLOGRAPHIC TRACKPAD & MEDIA ====================
-    tab_remote = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    tab_remote.set_border_width(14)
+    sel_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    sel_bar.get_style_context().add_class("card")
+    sel_bar.set_border_width(14)
+    lbl_map_sel = Gtk.Label(label="Arraste os nós no mapa para organizar seus monitores. Selecione o alvo para estender tela ou controlar.")
+    lbl_map_sel.set_xalign(0)
+    lbl_map_sel.set_line_wrap(True)
+    lbl_map_sel.get_style_context().add_class("muted")
+    sel_bar.pack_start(lbl_map_sel, True, True, 0)
 
-    remote_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
-    lbl_remote_target = Gtk.Label(label="Alvo: aguardando dispositivo...")
-    lbl_remote_target.set_xalign(0)
-    lbl_remote_target.get_style_context().add_class("section-title")
-    remote_top.pack_start(lbl_remote_target, True, True, 0)
+    btn_sel_screen = Gtk.Button(label="Estender Tela")
+    btn_sel_screen.get_style_context().add_class("btn-primary")
+    btn_sel_screen.connect("clicked", lambda _w: switch_page("screen"))
 
-    lbl_sens = Gtk.Label(label="Sensibilidade")
-    lbl_sens.get_style_context().add_class("muted")
-    scale_sens = Gtk.Scale.new_with_range(Gtk.Orientation.HORIZONTAL, 0.8, 3.2, 0.1)
-    scale_sens.set_value(float(cfg.get("sensitivity", 1.6)))
-    scale_sens.set_size_request(140, -1)
-    scale_sens.set_draw_value(False)
-    scale_sens.connect("value-changed", lambda s: cfg.__setitem__("sensitivity", round(s.get_value(), 2)))
-    remote_top.pack_start(lbl_sens, False, False, 0)
-    remote_top.pack_start(scale_sens, False, False, 0)
-    tab_remote.pack_start(remote_top, False, False, 0)
+    btn_sel_remote = Gtk.Button(label="Mouse & Teclado")
+    btn_sel_remote.get_style_context().add_class("btn-ghost")
+    btn_sel_remote.connect("clicked", lambda _w: switch_page("remote"))
 
-    tp_card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=0)
-    tp_card.get_style_context().add_class("card")
-    tp_canvas = Gtk.DrawingArea()
-    tp_canvas.set_size_request(640, 330)
-    tp_canvas.add_events(
-        Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.BUTTON_RELEASE_MASK | Gdk.EventMask.POINTER_MOTION_MASK | Gdk.EventMask.SCROLL_MASK
-    )
-    tp_card.pack_start(tp_canvas, True, True, 0)
-    tab_remote.pack_start(tp_card, True, True, 0)
+    btn_sel_ping = Gtk.Button(label="Localizar")
+    btn_sel_ping.get_style_context().add_class("btn-ghost")
+    btn_sel_ping.connect("clicked", lambda _w: send_remote({"kind": "media", "action": "ping"}))
 
-    def draw_trackpad(widget, cr):
+    sel_bar.pack_start(btn_sel_screen, False, False, 0)
+    sel_bar.pack_start(btn_sel_remote, False, False, 0)
+    sel_bar.pack_start(btn_sel_ping, False, False, 0)
+    map_page.pack_start(sel_bar, False, False, 0)
+    stack.add_named(map_page, "map")
+
+    # ==================== VIEW 2: EXTENSÃO DE TELA / SECOND SCREEN ====================
+    screen_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+    screen_page.set_margin_top(18)
+    screen_page.set_margin_bottom(18)
+    screen_page.set_margin_start(20)
+    screen_page.set_margin_end(20)
+
+    scr_card = make_card(pad=18, spacing=14)
+    lbl_scr_h = Gtk.Label(label="Extensão de Monitor / Segunda Tela via LAN")
+    lbl_scr_h.set_xalign(0)
+    lbl_scr_h.get_style_context().add_class("section-title")
+    lbl_scr_sub = Gtk.Label(label="Transmita sua tela ou monitor secundário diretamente para o Tablet Android ou Windows em tempo real, com toque e cursor sincronizados.")
+    lbl_scr_sub.set_xalign(0)
+    lbl_scr_sub.set_line_wrap(True)
+    lbl_scr_sub.get_style_context().add_class("muted")
+    scr_card.pack_start(lbl_scr_h, False, False, 0)
+    scr_card.pack_start(lbl_scr_sub, False, False, 0)
+
+    scr_ctrl_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    combo_mon = Gtk.ComboBoxText()
+    for m in monitors:
+        combo_mon.append_text(m["label"])
+    combo_mon.set_active(0)
+
+    combo_fps = Gtk.ComboBoxText()
+    combo_fps.append_text("15 FPS · Equilibrado (1280px)")
+    combo_fps.append_text("20 FPS · Fluido (1100px)")
+    combo_fps.append_text("10 FPS · Alta Nitidez (1440px)")
+    combo_fps.set_active(0)
+
+    btn_toggle_stream = Gtk.Button(label="Iniciar Extensão para Tablet/PC")
+    btn_toggle_stream.get_style_context().add_class("btn-primary")
+
+    scr_ctrl_row.pack_start(combo_mon, True, True, 0)
+    scr_ctrl_row.pack_start(combo_fps, False, False, 0)
+    scr_ctrl_row.pack_start(btn_toggle_stream, False, False, 0)
+    scr_card.pack_start(scr_ctrl_row, False, False, 0)
+
+    lbl_stream_status = Gtk.Label(label="Status: pronto · Clique em Iniciar Extensão ou toque em 'Pedir Tela' no seu Tablet.")
+    lbl_stream_status.set_xalign(0)
+    lbl_stream_status.get_style_context().add_class("mono")
+    scr_card.pack_start(lbl_stream_status, False, False, 0)
+    screen_page.pack_start(scr_card, False, False, 0)
+
+    # Live Screen Preview / Receiver Canvas
+    rx_canvas = Gtk.DrawingArea()
+    rx_canvas.set_hexpand(True)
+    rx_canvas.set_vexpand(True)
+    rx_canvas.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.POINTER_MOTION_MASK)
+    rx_frame = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    rx_frame.get_style_context().add_class("card")
+    rx_frame.pack_start(rx_canvas, True, True, 0)
+    screen_page.pack_start(rx_frame, True, True, 0)
+
+    def on_rx_draw(widget, cr):
         alloc = widget.get_allocation()
-        w, h = float(alloc.width), float(alloc.height)
-        bg = cairo.RadialGradient(w / 2.0, h / 2.0, 10, w / 2.0, h / 2.0, max(w, h) * 0.72)
-        bg.add_color_stop_rgb(0.0, 0.047, 0.086, 0.165)
-        bg.add_color_stop_rgb(1.0, 0.020, 0.031, 0.063)
-        cr.set_source(bg)
+        w, h = max(1, alloc.width), max(1, alloc.height)
+        cr.set_source_rgb(0.025, 0.04, 0.075)
         cr.rectangle(0, 0, w, h)
         cr.fill()
+        pb = state["rx_pixbuf"]
+        if pb is None:
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_BOLD)
+            cr.set_font_size(14)
+            cr.set_source_rgb(0.82, 0.88, 0.96)
+            txt = "Prévia / Receptor de Segunda Tela"
+            ext = cr.text_extents(txt)
+            cr.move_to((w - ext.width) / 2, h / 2 - 10)
+            cr.show_text(txt)
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
+            cr.set_font_size(12)
+            cr.set_source_rgb(0.55, 0.64, 0.76)
+            sub = "Inicie a transmissão acima para enviar este monitor ao Tablet Android, ou receba a tela de outro PC aqui."
+            ext2 = cr.text_extents(sub)
+            cr.move_to((w - ext2.width) / 2, h / 2 + 16)
+            cr.show_text(sub)
+            return
+        bw, bh = pb.get_width(), pb.get_height()
+        scale = min(w / float(bw), h / float(bh))
+        dw, dh = int(bw * scale), int(bh * scale)
+        ox, oy = (w - dw) / 2.0, (h - dh) / 2.0
+        scaled = pb.scale_simple(max(1, dw), max(1, dh), GdkPixbuf.InterpType.BILINEAR)
+        Gdk.cairo_set_source_pixbuf(cr, scaled, ox, oy)
+        cr.paint()
 
-        # Cyan precision dot matrix
-        cr.set_source_rgba(0.133, 0.827, 0.933, 0.22)
-        for gx in range(26, int(w), 26):
-            for gy in range(26, int(h), 26):
-                cr.arc(gx, gy, 1.0, 0, 2 * math.pi)
-                cr.fill()
+    rx_canvas.connect("draw", on_rx_draw)
 
-        # HUD Corner Brackets
-        cr.set_source_rgba(0.133, 0.827, 0.933, 0.55)
+    def capture_monitor_jpeg(mon, target_w=1280, quality=65):
+        # Method 1: Fast native GTK/GdkPixbuf capture (X11)
+        try:
+            root_w = Gdk.get_default_root_window()
+            if root_w is not None:
+                pb = Gdk.pixbuf_get_from_window(root_w, mon["x"], mon["y"], mon["w"], mon["h"])
+                if pb is not None:
+                    bw, bh = pb.get_width(), pb.get_height()
+                    if bw > target_w:
+                        th = max(1, int(bh * (target_w / float(bw))))
+                        pb = pb.scale_simple(target_w, th, GdkPixbuf.InterpType.BILINEAR)
+                    ok, buf = pb.save_to_bufferv("jpeg", ["quality"], [str(quality)])
+                    if ok and buf:
+                        return bytes(buf), pb.get_width(), pb.get_height(), pb
+        except Exception:
+            pass
+        # Method 2: Wayland fallback via grim
+        if shutil.which("grim"):
+            try:
+                out = subprocess.check_output(["grim", "-t", "jpeg", "-q", str(quality), "-"], timeout=1.5)
+                if out:
+                    return out, target_w, int(target_w * 9 / 16), None
+            except Exception:
+                pass
+        return None, 0, 0, None
+
+    def stop_screen_stream():
+        if not state["streaming_out"]:
+            return
+        state["streaming_out"] = False
+        client.send({"type": "screen:stop", "sourceDeviceId": DEVICE_ID, "targetDeviceId": state["stream_target_id"]})
+        btn_toggle_stream.set_label("Iniciar Extensão para Tablet/PC")
+        sc = btn_toggle_stream.get_style_context()
+        sc.remove_class("btn-danger")
+        sc.add_class("btn-primary")
+        lbl_stream_status.set_text("Status: transmissão pausada.")
+        state["rx_pixbuf"] = None
+        rx_canvas.queue_draw()
+
+    def start_screen_stream(explicit_target_id=None):
+        tgt = get_target_device()
+        target_id = explicit_target_id or (tgt["id"] if tgt and tgt.get("id") != DEVICE_ID else None)
+        idx = max(0, combo_mon.get_active())
+        mon = monitors[idx] if idx < len(monitors) else monitors[0]
+        _active_mon_geom.update({"x": mon["x"], "y": mon["y"], "w": mon["w"], "h": mon["h"]})
+
+        preset = combo_fps.get_active()
+        if preset == 1:
+            fps, tw, q = 20, 1100, 58
+        elif preset == 2:
+            fps, tw, q = 10, 1440, 76
+        else:
+            fps, tw, q = 15, 1280, 65
+
+        state["streaming_out"] = True
+        state["stream_target_id"] = target_id
+        state["stream_fps"] = fps
+        state["stream_seq"] = 0
+        btn_toggle_stream.set_label("Parar Extensão de Tela")
+        sc = btn_toggle_stream.get_style_context()
+        sc.remove_class("btn-primary")
+        sc.add_class("btn-danger")
+        lbl_stream_status.set_text(f"Transmitindo {mon['label']} · {fps} FPS · LAN Direta")
+
+        client.send({
+            "type": "screen:start",
+            "sourceDeviceId": DEVICE_ID,
+            "sourceDeviceName": f"{HOSTNAME} (Linux)",
+            "targetDeviceId": target_id,
+            "mode": "extend",
+            "width": mon["w"],
+            "height": mon["h"],
+            "fps": fps,
+        })
+
+        def _tick_capture():
+            if not state["streaming_out"] or not client.running:
+                return False
+            if client.connected:
+                jpg, cw, ch, pb = capture_monitor_jpeg(mon, target_w=tw, quality=q)
+                if jpg:
+                    state["stream_seq"] += 1
+                    b64 = base64.b64encode(jpg).decode("ascii")
+                    client.send({
+                        "type": "screen:frame",
+                        "sourceDeviceId": DEVICE_ID,
+                        "targetDeviceId": state["stream_target_id"],
+                        "width": cw,
+                        "height": ch,
+                        "seq": state["stream_seq"],
+                        "data": b64,
+                    })
+                    if pb is not None:
+                        state["rx_pixbuf"] = pb
+                        rx_canvas.queue_draw()
+            return state["streaming_out"]
+
+        GLib.timeout_add(int(1000 / max(1, fps)), _tick_capture)
+
+    def on_toggle_stream(_w):
+        if state["streaming_out"]:
+            stop_screen_stream()
+        else:
+            start_screen_stream()
+
+    btn_toggle_stream.connect("clicked", on_toggle_stream)
+    stack.add_named(screen_page, "screen")
+
+    # ==================== VIEW 3: MOUSE & TECLADO CONTÍNUO (KVM + TRACKPAD) ====================
+    remote_page = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14)
+    remote_page.set_margin_top(18)
+    remote_page.set_margin_bottom(18)
+    remote_page.set_margin_start(20)
+    remote_page.set_margin_end(20)
+
+    kvm_bar = make_card(pad=16, spacing=10)
+    kvm_top = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    lbl_rem_target = Gtk.Label(label="Alvo: conecte um Tablet ou PC na mesma rede Wi-Fi")
+    lbl_rem_target.set_xalign(0)
+    lbl_rem_target.get_style_context().add_class("section-title")
+    kvm_top.pack_start(lbl_rem_target, True, True, 0)
+
+    sw_edge_lbl = Gtk.Label(label="Estender Mouse pela Borda:")
+    sw_edge_lbl.get_style_context().add_class("muted")
+    sw_edge = Gtk.Switch()
+    sw_edge.set_active(state["kvm_edge_enabled"])
+
+    combo_edge = Gtk.ComboBoxText()
+    for val, lbl in [("right", "Borda Direita"), ("left", "Borda Esquerda"), ("top", "Borda Superior"), ("bottom", "Borda Inferior")]:
+        combo_edge.append(val, lbl)
+    combo_edge.set_active_id(state["kvm_edge_side"])
+
+    def on_edge_changed(_w, _p=None):
+        state["kvm_edge_enabled"] = sw_edge.get_active()
+        state["kvm_edge_side"] = combo_edge.get_active_id() or "right"
+        cfg["kvmEdgeEnabled"] = state["kvm_edge_enabled"]
+        cfg["kvmEdgeSide"] = state["kvm_edge_side"]
+        save_config(cfg)
+
+    sw_edge.connect("notify::active", on_edge_changed)
+    combo_edge.connect("changed", on_edge_changed)
+
+    kvm_top.pack_start(sw_edge_lbl, False, False, 0)
+    kvm_top.pack_start(sw_edge, False, False, 0)
+    kvm_top.pack_start(combo_edge, False, False, 0)
+    kvm_bar.pack_start(kvm_top, False, False, 0)
+    remote_page.pack_start(kvm_bar, False, False, 0)
+
+    # Holographic Trackpad & Live Keyboard Capture Pad
+    pad_area = Gtk.DrawingArea()
+    pad_area.set_hexpand(True)
+    pad_area.set_vexpand(True)
+    pad_area.set_can_focus(True)
+    pad_area.add_events(
+        Gdk.EventMask.BUTTON_PRESS_MASK
+        | Gdk.EventMask.BUTTON_RELEASE_MASK
+        | Gdk.EventMask.POINTER_MOTION_MASK
+        | Gdk.EventMask.SCROLL_MASK
+        | Gdk.EventMask.KEY_PRESS_MASK
+    )
+    pad_wrap = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+    pad_wrap.get_style_context().add_class("card")
+    pad_wrap.pack_start(pad_area, True, True, 0)
+    remote_page.pack_start(pad_wrap, True, True, 0)
+
+    def on_pad_draw(widget, cr):
+        alloc = widget.get_allocation()
+        w, h = max(1, alloc.width), max(1, alloc.height)
+        bg = cairo.RadialGradient(w / 2, h / 2, 10, w / 2, h / 2, max(w, h) * 0.72)
+        bg.add_color_stop_rgb(0, 0.05, 0.09, 0.165)
+        bg.add_color_stop_rgb(1, 0.024, 0.039, 0.075)
+        cr.set_source(bg); cr.rectangle(0, 0, w, h); cr.fill()
+
+        cr.set_source_rgba(0.13, 0.83, 0.93, 0.20)
+        for gx in range(28, w, 28):
+            for gy in range(28, h, 28):
+                cr.arc(gx, gy, 1.0, 0, 2 * math.pi); cr.fill()
+
+        m, b = 18, 22
+        cr.set_source_rgba(0.13, 0.83, 0.93, 0.55)
         cr.set_line_width(2.0)
-        m, b = 16.0, 20.0
-        for (x0, y0, dx, dy) in [(m, m, b, b), (w - m, m, -b, b), (m, h - m, b, -b), (w - m, h - m, -b, -b)]:
-            cr.move_to(x0, y0)
-            cr.line_to(x0 + dx, y0)
-            cr.move_to(x0, y0)
-            cr.line_to(x0, y0 + dy)
-        cr.stroke()
+        cr.move_to(m, m + b); cr.line_to(m, m); cr.line_to(m + b, m); cr.stroke()
+        cr.move_to(w - m - b, m); cr.line_to(w - m, m); cr.line_to(w - m, m + b); cr.stroke()
+        cr.move_to(m, h - m - b); cr.line_to(m, h - m); cr.line_to(m + b, h - m); cr.stroke()
+        cr.move_to(w - m - b, h - m); cr.line_to(w - m, h - m); cr.line_to(w - m, h - m - b); cr.stroke()
 
-        if not state["tp_cursor"]:
-            cr.set_source_rgba(0.55, 0.64, 0.77, 0.55)
-            cr.select_font_face("Sans", 0, 0)
+        if not state["track_cursor"]:
+            cr.select_font_face("Sans", cairo.FONT_SLANT_NORMAL, cairo.FONT_WEIGHT_NORMAL)
             cr.set_font_size(13)
-            hint = "Superfície Tátil Holográfica · Arraste para mover · Clique Esq/Dir · Scroll"
+            cr.set_source_rgba(0.58, 0.66, 0.77, 0.82)
+            hint = "Superfície KVM Holográfica · Arraste para mover cursor · Clique Esq/Dir · Scroll · Digite direto com o teclado"
             ext = cr.text_extents(hint)
-            cr.move_to((w - ext.width) / 2.0, h / 2.0)
+            cr.move_to((w - ext.width) / 2, h / 2)
             cr.show_text(hint)
 
-        now = time.time()
-        # Luminous comet trail
-        state["tp_trail"] = [(x, y, t0) for (x, y, t0) in state["tp_trail"] if now - t0 < 0.28]
-        tr = state["tp_trail"]
+        now = time.monotonic()
+        state["track_trail"] = [pt for pt in state["track_trail"] if now - pt[2] < 0.25]
+        tr = state["track_trail"]
         for i in range(1, len(tr)):
-            p0, p1 = tr[i - 1], tr[i]
-            age = (now - p1[2]) / 0.28
-            cr.set_source_rgba(0.133, 0.827, 0.933, (1.0 - age) * 0.85)
-            cr.set_line_width((1.0 - age) * 6.5 + 1.5)
+            age = (now - tr[i][2]) / 0.25
+            cr.set_source_rgba(0.13, 0.83, 0.93, max(0.0, (1.0 - age) * 0.85))
+            cr.set_line_width((1.0 - age) * 6.0 + 1.5)
             cr.set_line_cap(cairo.LINE_CAP_ROUND)
-            cr.move_to(p0[0], p0[1])
-            cr.line_to(p1[0], p1[1])
-            cr.stroke()
+            cr.move_to(tr[i - 1][0], tr[i - 1][1]); cr.line_to(tr[i][0], tr[i][1]); cr.stroke()
 
-        # Multi-ring shockwaves
-        alive = []
-        for rx, ry, t0 in state["tp_ripples"]:
-            age = now - t0
-            if age < 0.48:
-                p = age / 0.48
-                cr.set_source_rgba(0.133, 0.827, 0.933, (1.0 - p) * 0.8)
-                cr.set_line_width(2.0)
-                cr.arc(rx, ry, 10.0 + p * 48.0, 0, 2 * math.pi)
-                cr.stroke()
-                cr.set_source_rgba(0.545, 0.361, 0.965, (1.0 - p) * 0.5)
-                cr.arc(rx, ry, 6.0 + p * 30.0, 0, 2 * math.pi)
-                cr.stroke()
-                alive.append((rx, ry, t0))
-        state["tp_ripples"] = alive
+        state["track_ripples"] = [r for r in state["track_ripples"] if now - r[2] < 0.45]
+        for rx, ry, t0 in state["track_ripples"]:
+            p = (now - t0) / 0.45
+            cr.set_source_rgba(0.13, 0.83, 0.93, max(0.0, (1.0 - p) * 0.82))
+            cr.set_line_width(2.0)
+            cr.arc(rx, ry, 10 + p * 46, 0, 2 * math.pi); cr.stroke()
 
-        if state["tp_cursor"]:
-            cx, cy = state["tp_cursor"]
-            g = cairo.RadialGradient(cx, cy, 2, cx, cy, 28)
-            g.add_color_stop_rgba(0.0, 0.133, 0.827, 0.933, 0.65)
-            g.add_color_stop_rgba(1.0, 0.133, 0.827, 0.933, 0.0)
-            cr.set_source(g)
-            cr.arc(cx, cy, 28.0, 0, 2 * math.pi)
-            cr.fill()
-            cr.set_source_rgb(1.0, 1.0, 1.0)
-            cr.arc(cx, cy, 4.5, 0, 2 * math.pi)
-            cr.fill()
-        return False
+        if state["track_cursor"]:
+            cx, cy = state["track_cursor"]
+            gp = cairo.RadialGradient(cx, cy, 2, cx, cy, 28)
+            gp.add_color_stop_rgba(0, 0.13, 0.83, 0.93, 0.55)
+            gp.add_color_stop_rgba(1, 0.13, 0.83, 0.93, 0.0)
+            cr.set_source(gp); cr.arc(cx, cy, 28, 0, 2 * math.pi); cr.fill()
+            cr.set_source_rgb(1.0, 1.0, 1.0); cr.arc(cx, cy, 4.5, 0, 2 * math.pi); cr.fill()
 
-    def send_remote(ev_payload):
-        tgt = get_target_device()
-        tid = tgt.get("id") if tgt else None
-        if not tid:
-            show_toast("Selecione um dispositivo alvo no Mapa Holográfico.")
-            return
-        client.send({"type": "input:event", "targetDeviceId": tid, "event": ev_payload})
-
-    def on_tp_press(_w, ev):
-        now = time.time()
-        state["tp_cursor"] = (ev.x, ev.y)
-        state["tp_trail"] = [(ev.x, ev.y, now)]
-        state["tp_ripples"].append((ev.x, ev.y, now))
+    def on_pad_press(widget, ev):
+        widget.grab_focus()
+        now = time.monotonic()
+        state["track_cursor"] = (ev.x, ev.y)
+        state["track_trail"] = [(ev.x, ev.y, now)]
+        state["track_ripples"].append((ev.x, ev.y, now))
         if ev.button == 3:
             send_remote({"kind": "click", "button": "right"})
+        elif ev.button == 2:
+            send_remote({"kind": "click", "button": "middle"})
         else:
-            state["tp_last"] = (ev.x, ev.y)
-            state["tp_moved"] = False
-        tp_canvas.queue_draw()
+            state["track_last"] = (ev.x, ev.y)
+            state["track_moved"] = False
+        pad_area.queue_draw()
         return True
 
-    def on_tp_motion(_w, ev):
-        if state["tp_last"] is not None:
+    def on_pad_motion(_w, ev):
+        if state["track_last"] is not None:
             sens = float(cfg.get("sensitivity", 1.6))
-            dx = (ev.x - state["tp_last"][0]) * sens
-            dy = (ev.y - state["tp_last"][1]) * sens
-            state["tp_last"] = (ev.x, ev.y)
-            state["tp_cursor"] = (ev.x, ev.y)
-            state["tp_trail"].append((ev.x, ev.y, time.time()))
-            if len(state["tp_trail"]) > 24:
-                state["tp_trail"].pop(0)
+            dx = (ev.x - state["track_last"][0]) * sens
+            dy = (ev.y - state["track_last"][1]) * sens
+            state["track_last"] = (ev.x, ev.y)
+            state["track_cursor"] = (ev.x, ev.y)
+            state["track_trail"].append((ev.x, ev.y, time.monotonic()))
+            if len(state["track_trail"]) > 24:
+                state["track_trail"].pop(0)
             if abs(dx) > 0.4 or abs(dy) > 0.4:
-                state["tp_moved"] = True
+                state["track_moved"] = True
                 send_remote({"kind": "move", "dx": round(dx, 2), "dy": round(dy, 2)})
-            tp_canvas.queue_draw()
+            pad_area.queue_draw()
         return True
 
-    def on_tp_release(_w, ev):
-        if ev.button == 1 and state["tp_last"] is not None and not state["tp_moved"]:
+    def on_pad_release(_w, ev):
+        if ev.button == 1 and state["track_last"] is not None and not state["track_moved"]:
             send_remote({"kind": "click", "button": "left"})
-            state["tp_ripples"].append((ev.x, ev.y, time.time()))
-        state["tp_last"] = None
-        state["tp_cursor"] = None
-        tp_canvas.queue_draw()
+            state["track_ripples"].append((ev.x, ev.y, time.monotonic()))
+        state["track_last"] = None
+        state["track_cursor"] = None
+        pad_area.queue_draw()
         return True
 
-    def on_tp_scroll(_w, ev):
-        if ev.direction == Gdk.ScrollDirection.UP:
-            send_remote({"kind": "scroll", "dx": 0, "dy": -45})
-        elif ev.direction == Gdk.ScrollDirection.DOWN:
-            send_remote({"kind": "scroll", "dx": 0, "dy": 45})
+    def on_pad_scroll(_w, ev):
+        dy = 42 if ev.direction == Gdk.ScrollDirection.DOWN else -42
+        send_remote({"kind": "scroll", "dx": 0, "dy": dy})
         return True
 
-    tp_canvas.connect("draw", draw_trackpad)
-    tp_canvas.connect("button-press-event", on_tp_press)
-    tp_canvas.connect("motion-notify-event", on_tp_motion)
-    tp_canvas.connect("button-release-event", on_tp_release)
-    tp_canvas.connect("scroll-event", on_tp_scroll)
+    def on_pad_key(_w, ev):
+        kname = Gdk.keyval_name(ev.keyval) or ""
+        special = {
+            "Return": "Enter", "BackSpace": "Backspace", "Escape": "Escape",
+            "Tab": "Tab", "space": "Space", "Up": "ArrowUp", "Down": "ArrowDown",
+            "Left": "ArrowLeft", "Right": "ArrowRight",
+        }
+        if kname in special:
+            send_remote({"kind": "key", "key": special[kname]})
+            return True
+        ch = chr(Gdk.keyval_to_unicode(ev.keyval)) if Gdk.keyval_to_unicode(ev.keyval) else ""
+        if ch and ch.isprintable():
+            send_remote({"kind": "text", "text": ch})
+            return True
+        return False
 
-    act_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-    actions = [
-        ("Clique Esq", lambda: send_remote({"kind": "click", "button": "left"})),
-        ("Clique Dir", lambda: send_remote({"kind": "click", "button": "right"})),
-        ("Vol −", lambda: send_remote({"kind": "media", "action": "vol_down"})),
-        ("Vol +", lambda: send_remote({"kind": "media", "action": "vol_up"})),
-        ("Mudo", lambda: send_remote({"kind": "media", "action": "mute"})),
-        ("Play/Pause", lambda: send_remote({"kind": "media", "action": "play_pause"})),
-        ("Próxima", lambda: send_remote({"kind": "media", "action": "next"})),
-        ("Bloquear", lambda: send_remote({"kind": "media", "action": "lock"})),
-        ("Localizar", lambda: send_remote({"kind": "media", "action": "ping"})),
-    ]
-    for label, fn in actions:
-        b = Gtk.Button(label=label)
-        b.get_style_context().add_class("btn-secondary")
-        b.connect("clicked", lambda _w, f=fn: f())
-        act_row.pack_start(b, True, True, 0)
-    tab_remote.pack_start(act_row, False, False, 0)
+    pad_area.connect("draw", on_pad_draw)
+    pad_area.connect("button-press-event", on_pad_press)
+    pad_area.connect("motion-notify-event", on_pad_motion)
+    pad_area.connect("button-release-event", on_pad_release)
+    pad_area.connect("scroll-event", on_pad_scroll)
+    pad_area.connect("key-press-event", on_pad_key)
 
-    kb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    entry_remote_text = Gtk.Entry()
-    entry_remote_text.set_placeholder_text("Digite texto para enviar diretamente ao dispositivo alvo...")
-    btn_send_text = Gtk.Button(label="Enviar Texto")
-    btn_send_text.get_style_context().add_class("btn-primary")
-    btn_send_enter = Gtk.Button(label="Enter")
-    btn_send_enter.get_style_context().add_class("btn-secondary")
+    # Bottom Keyboard & Media Controls (2 Clean Spacious Rows — NEVER crowded!)
+    rem_controls = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
+    kb_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    ent_type = Gtk.Entry()
+    ent_type.set_placeholder_text("Digite texto para enviar diretamente ao teclado do dispositivo alvo...")
+    btn_send_txt = Gtk.Button(label="Enviar Texto")
+    btn_send_txt.get_style_context().add_class("btn-primary")
+    btn_send_ent = Gtk.Button(label="Enter")
+    btn_send_ent.get_style_context().add_class("btn-ghost")
+    btn_send_bs = Gtk.Button(label="Backspace")
+    btn_send_bs.get_style_context().add_class("btn-ghost")
 
-    def do_send_text(*_args):
-        txt = entry_remote_text.get_text()
-        if txt:
-            send_remote({"kind": "text", "text": txt})
-            entry_remote_text.set_text("")
+    def do_send_text(_w=None):
+        t = ent_type.get_text()
+        if t:
+            send_remote({"kind": "text", "text": t})
+            ent_type.set_text("")
 
-    entry_remote_text.connect("activate", do_send_text)
-    btn_send_text.connect("clicked", do_send_text)
-    btn_send_enter.connect("clicked", lambda _w: send_remote({"kind": "key", "key": "Enter"}))
-    kb_row.pack_start(entry_remote_text, True, True, 0)
-    kb_row.pack_start(btn_send_text, False, False, 0)
-    kb_row.pack_start(btn_send_enter, False, False, 0)
-    tab_remote.pack_start(kb_row, False, False, 0)
-    stack.add_named(tab_remote, "remote")
+    ent_type.connect("activate", do_send_text)
+    btn_send_txt.connect("clicked", do_send_text)
+    btn_send_ent.connect("clicked", lambda _w: send_remote({"kind": "key", "key": "Enter"}))
+    btn_send_bs.connect("clicked", lambda _w: send_remote({"kind": "key", "key": "Backspace"}))
+    kb_row.pack_start(ent_type, True, True, 0)
+    kb_row.pack_start(btn_send_txt, False, False, 0)
+    kb_row.pack_start(btn_send_ent, False, False, 0)
+    kb_row.pack_start(btn_send_bs, False, False, 0)
+    rem_controls.pack_start(kb_row, False, False, 0)
 
-    # ==================== TAB 3: FILES & CLIPBOARD ====================
-    tab_transfer = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    tab_transfer.set_border_width(14)
+    media_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    for lbl, ev in [
+        ("Clique Esq.", {"kind": "click", "button": "left"}),
+        ("Clique Dir.", {"kind": "click", "button": "right"}),
+        ("Vol −", {"kind": "media", "action": "vol_down"}),
+        ("Vol +", {"kind": "media", "action": "vol_up"}),
+        ("Play / Pause", {"kind": "media", "action": "play_pause"}),
+        ("Alt + Tab", {"kind": "key", "key": "Alt+Tab"}),
+    ]:
+        b = Gtk.Button(label=lbl)
+        b.get_style_context().add_class("btn-ghost")
+        b.connect("clicked", lambda _w, payload=ev: send_remote(payload))
+        media_row.pack_start(b, True, True, 0)
+    rem_controls.pack_start(media_row, False, False, 0)
+    remote_page.pack_start(rem_controls, False, False, 0)
+    stack.add_named(remote_page, "remote")
 
-    file_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    file_col.get_style_context().add_class("card")
-    file_col.set_border_width(14)
-    lbl_fh = Gtk.Label(label="Transferência Direta LAN")
-    lbl_fh.set_xalign(0)
-    lbl_fh.get_style_context().add_class("section-title")
-    file_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-    btn_pick_file = Gtk.Button(label="Escolher e Enviar Arquivo")
-    btn_pick_file.get_style_context().add_class("btn-primary")
-    btn_open_dl = Gtk.Button(label="Abrir Downloads")
-    btn_open_dl.get_style_context().add_class("btn-secondary")
-    file_btn_row.pack_start(btn_pick_file, True, True, 0)
-    file_btn_row.pack_start(btn_open_dl, False, False, 0)
+    # ==================== VIEW 4: CLIPBOARD AUTOMÁTICO & ARQUIVOS ====================
+    transfer_scroll, transfer_inner = make_scrolled_page()
 
-    file_progress = Gtk.ProgressBar()
-    file_progress.set_show_text(True)
-    file_progress.set_text("Pronto para transferência LAN")
+    # Card 1: Universal Auto-Sync Clipboard
+    clip_card = make_card(pad=18, spacing=12)
+    clip_hdr = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+    clip_tbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=3)
+    lbl_ch = Gtk.Label(label="Área de Transferência Universal (Sincronização Automática)")
+    lbl_ch.set_xalign(0); lbl_ch.get_style_context().add_class("section-title")
+    lbl_cs = Gtk.Label(label="Quando ativo, qualquer Ctrl+C no Linux é enviado na hora para Tablet/Windows e vice-versa.")
+    lbl_cs.set_xalign(0); lbl_cs.set_line_wrap(True); lbl_cs.get_style_context().add_class("muted")
+    clip_tbox.pack_start(lbl_ch, False, False, 0)
+    clip_tbox.pack_start(lbl_cs, False, False, 0)
+    clip_hdr.pack_start(clip_tbox, True, True, 0)
 
-    file_scroll = Gtk.ScrolledWindow()
-    file_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    file_listbox = Gtk.ListBox()
-    file_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-    file_scroll.add(file_listbox)
-    file_col.pack_start(lbl_fh, False, False, 0)
-    file_col.pack_start(file_btn_row, False, False, 0)
-    file_col.pack_start(file_progress, False, False, 0)
-    file_col.pack_start(file_scroll, True, True, 0)
-    tab_transfer.pack_start(file_col, True, True, 0)
+    sw_clip = Gtk.Switch()
+    sw_clip.set_active(state["auto_clip"])
+    sw_clip.set_valign(Gtk.Align.CENTER)
+    def on_sw_clip(_w, _p):
+        state["auto_clip"] = sw_clip.get_active()
+        cfg["autoClipboard"] = state["auto_clip"]
+        save_config(cfg)
+    sw_clip.connect("notify::active", on_sw_clip)
+    clip_hdr.pack_start(sw_clip, False, False, 0)
+    clip_card.pack_start(clip_hdr, False, False, 0)
 
-    def choose_and_send_file(*_args):
-        dlg = Gtk.FileChooserDialog(title="Enviar Arquivo pela Rede Local", parent=win, action=Gtk.FileChooserAction.OPEN)
-        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, Gtk.STOCK_OPEN, Gtk.ResponseType.OK)
-        if dlg.run() == Gtk.ResponseType.OK:
-            fpath = dlg.get_filename()
-            if fpath and os.path.isfile(fpath):
-                tgt = get_target_device()
-                tid = tgt.get("id") if tgt and tgt.get("id") != DEVICE_ID else None
-                client.send_file(fpath, target_id=tid)
-                show_toast(f"Enviando {os.path.basename(fpath)} via LAN...")
-        dlg.destroy()
-
-    btn_pick_file.connect("clicked", choose_and_send_file)
-    btn_open_dl.connect("clicked", lambda _w: (os.makedirs(DOWNLOADS_DIR, exist_ok=True), run_cmd(["xdg-open", DOWNLOADS_DIR])))
-
-    clip_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    clip_col.get_style_context().add_class("card")
-    clip_col.set_border_width(14)
-    lbl_ch = Gtk.Label(label="Área de Transferência Universal")
-    lbl_ch.set_xalign(0)
-    lbl_ch.get_style_context().add_class("section-title")
-
-    clip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-    entry_clip = Gtk.Entry()
-    entry_clip.set_placeholder_text("Cole ou digite texto para compartilhar...")
-    btn_push_clip = Gtk.Button(label="Enviar")
-    btn_push_clip.get_style_context().add_class("btn-primary")
-    btn_grab_clip = Gtk.Button(label="Capturar")
-    btn_grab_clip.get_style_context().add_class("btn-secondary")
-    clip_row.pack_start(entry_clip, True, True, 0)
-    clip_row.pack_start(btn_push_clip, False, False, 0)
-    clip_row.pack_start(btn_grab_clip, False, False, 0)
-
-    clip_scroll = Gtk.ScrolledWindow()
-    clip_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    clip_listbox = Gtk.ListBox()
-    clip_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-    clip_scroll.add(clip_listbox)
-    clip_col.pack_start(lbl_ch, False, False, 0)
-    clip_col.pack_start(clip_row, False, False, 0)
-    clip_col.pack_start(clip_scroll, True, True, 0)
-    tab_transfer.pack_start(clip_col, True, True, 0)
+    clip_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    ent_clip = Gtk.Entry()
+    ent_clip.set_placeholder_text("Cole ou digite um texto para enviar imediatamente para a malha...")
+    btn_clip_push = Gtk.Button(label="Enviar Texto")
+    btn_clip_push.get_style_context().add_class("btn-primary")
+    btn_clip_sys = Gtk.Button(label="Enviar Ctrl+C Atual")
+    btn_clip_sys.get_style_context().add_class("btn-ghost")
 
     def push_clip_text(txt):
-        txt = (txt or "").strip()
         if not txt:
             return
+        state["last_clip_text"] = txt
         client.send({"type": "clipboard:push", "content": txt, "sourceDeviceId": DEVICE_ID, "sourceDeviceName": f"{HOSTNAME} (Linux)"})
-        show_toast("Texto sincronizado com toda a malha LAN.")
 
-    btn_push_clip.connect("clicked", lambda _w: (push_clip_text(entry_clip.get_text()), entry_clip.set_text("")))
-    btn_grab_clip.connect("clicked", lambda _w: push_clip_text(Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text()))
-    stack.add_named(tab_transfer, "transfer")
+    btn_clip_push.connect("clicked", lambda _w: (push_clip_text(ent_clip.get_text().strip()), ent_clip.set_text("")))
+    btn_clip_sys.connect("clicked", lambda _w: push_clip_text((Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or "").strip()))
+    clip_row.pack_start(ent_clip, True, True, 0)
+    clip_row.pack_start(btn_clip_push, False, False, 0)
+    clip_row.pack_start(btn_clip_sys, False, False, 0)
+    clip_card.pack_start(clip_row, False, False, 0)
 
-    # ==================== TAB 4: HYBRID LAN RADAR & ALERTS ====================
-    tab_net = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
-    tab_net.set_border_width(14)
+    clip_list_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    clip_card.pack_start(clip_list_box, False, False, 0)
+    transfer_inner.pack_start(clip_card, False, False, 0)
 
-    lan_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    lan_col.get_style_context().add_class("card")
-    lan_col.set_border_width(14)
-    lbl_lh = Gtk.Label(label="Radar Híbrido Wi-Fi / LAN (UDP + TCP /24)")
-    lbl_lh.set_xalign(0)
-    lbl_lh.get_style_context().add_class("section-title")
-    lbl_ls = Gtk.Label(
-        label=f"Hub Linux ativo em {get_local_lan_ip()}:{client.hub.port}. Se o firewall do Linux (UFW) estiver ativo, copie o comando abaixo ou deixe o Radar conectar automaticamente ao Android/Windows."
-    )
-    lbl_ls.set_xalign(0)
-    lbl_ls.set_line_wrap(True)
-    lbl_ls.get_style_context().add_class("muted")
+    # Card 2: Direct LAN File Transfer
+    file_card = make_card(pad=18, spacing=12)
+    lbl_fh = Gtk.Label(label="Transferência Direta de Arquivos (Velocidade Wi-Fi LAN)")
+    lbl_fh.set_xalign(0); lbl_fh.get_style_context().add_class("section-title")
+    file_card.pack_start(lbl_fh, False, False, 0)
 
-    fw_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-    btn_scan_net = Gtk.Button(label="Escanear Rede LAN Agora")
-    btn_scan_net.get_style_context().add_class("btn-primary")
-    btn_scan_net.connect("clicked", lambda _w: client.discovery.scan_subnet_tcp())
-    btn_copy_ufw = Gtk.Button(label="Copiar Comando UFW (45890/45891)")
-    btn_copy_ufw.get_style_context().add_class("btn-secondary")
-    btn_copy_ufw.connect("clicked", lambda _w: (
-        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text("sudo ufw allow 45891/tcp && sudo ufw allow 45890/udp", -1),
-        show_toast("Comando UFW copiado para a área de transferência!")
+    file_btn_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    btn_pick_file = Gtk.Button(label="Escolher e Enviar Arquivo")
+    btn_pick_file.get_style_context().add_class("btn-primary")
+    btn_open_dl = Gtk.Button(label="Abrir Pasta Recebidos")
+    btn_open_dl.get_style_context().add_class("btn-ghost")
+
+    def on_pick_file(_w):
+        dlg = Gtk.FileChooserDialog(title="Enviar arquivo via LAN", parent=win, action=Gtk.FileChooserAction.OPEN)
+        dlg.add_buttons(Gtk.STOCK_CANCEL, Gtk.ResponseType.CANCEL, "Enviar", Gtk.ResponseType.OK)
+        if dlg.run() == Gtk.ResponseType.OK:
+            fp = dlg.get_filename()
+            tgt = get_target_device()
+            tid = tgt["id"] if tgt and tgt.get("id") != DEVICE_ID else None
+            client.send_file(fp, target_id=tid)
+        dlg.destroy()
+
+    def on_open_dl(_w):
+        os.makedirs(DOWNLOADS_DIR, exist_ok=True)
+        run_cmd(["xdg-open", DOWNLOADS_DIR])
+
+    btn_pick_file.connect("clicked", on_pick_file)
+    btn_open_dl.connect("clicked", on_open_dl)
+    file_btn_row.pack_start(btn_pick_file, False, False, 0)
+    file_btn_row.pack_start(btn_open_dl, False, False, 0)
+    file_card.pack_start(file_btn_row, False, False, 0)
+
+    lbl_file_status = Gtk.Label(label="Pronto para transferir arquivos sem usar nuvem.")
+    lbl_file_status.set_xalign(0); lbl_file_status.get_style_context().add_class("muted")
+    prog_file = Gtk.ProgressBar()
+    file_hist_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    file_card.pack_start(lbl_file_status, False, False, 0)
+    file_card.pack_start(prog_file, False, False, 0)
+    file_card.pack_start(file_hist_box, False, False, 0)
+    transfer_inner.pack_start(file_card, False, False, 0)
+    stack.add_named(transfer_scroll, "transfer")
+
+    # ==================== VIEW 5: REDE LAN & SISTEMA ====================
+    net_scroll, net_inner = make_scrolled_page()
+
+    lan_card = make_card(pad=18, spacing=12)
+    lbl_nh = Gtk.Label(label="Radar Wi-Fi LAN & Conexão Direta")
+    lbl_nh.set_xalign(0); lbl_nh.get_style_context().add_class("section-title")
+    lbl_ns = Gtk.Label(label=f"Hub Linux ativo em {get_local_lan_ip()}:{LAN_WS_PORT} · Descoberta híbrida (UDP + Radar TCP /24).")
+    lbl_ns.set_xalign(0); lbl_ns.get_style_context().add_class("mono")
+    lan_card.pack_start(lbl_nh, False, False, 0)
+    lan_card.pack_start(lbl_ns, False, False, 0)
+
+    lan_actions = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    btn_scan_now = Gtk.Button(label="Escanear Sub-Rede Wi-Fi Agora")
+    btn_scan_now.get_style_context().add_class("btn-primary")
+    btn_scan_now.connect("clicked", lambda _w: client.discovery.scan_subnet_tcp())
+
+    btn_copy_ip = Gtk.Button(label=f"Copiar {get_local_lan_ip()}:{LAN_WS_PORT}")
+    btn_copy_ip.get_style_context().add_class("btn-ghost")
+    btn_copy_ip.connect("clicked", lambda _w: Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(f"{get_local_lan_ip()}:{LAN_WS_PORT}", -1))
+
+    btn_copy_ufw = Gtk.Button(label="Copiar Regra Firewall UFW")
+    btn_copy_ufw.get_style_context().add_class("btn-ghost")
+    btn_copy_ufw.connect("clicked", lambda _w: Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text("sudo ufw allow 45891/tcp && sudo ufw allow 45890/udp", -1))
+
+    lan_actions.pack_start(btn_scan_now, False, False, 0)
+    lan_actions.pack_start(btn_copy_ip, False, False, 0)
+    lan_actions.pack_start(btn_copy_ufw, False, False, 0)
+    lan_card.pack_start(lan_actions, False, False, 0)
+
+    lan_peers_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    lan_card.pack_start(lan_peers_box, False, False, 0)
+
+    # Manual IP + Room Code
+    manual_grid = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    ent_room = Gtk.Entry()
+    ent_room.set_text(cfg.get("roomCode", DEFAULT_ROOM_CODE))
+    ent_room.set_placeholder_text("Código da Malha")
+    ent_room.set_width_chars(12)
+
+    ent_manual = Gtk.Entry()
+    ent_manual.set_text(cfg.get("manualPeer", ""))
+    ent_manual.set_placeholder_text("IP do dispositivo (ex: 192.168.1.42 ou .42)")
+
+    btn_manual_conn = Gtk.Button(label="Conectar")
+    btn_manual_conn.get_style_context().add_class("btn-primary")
+    btn_manual_conn.connect("clicked", lambda _w: (
+        client.connect_to_peer(ent_manual.get_text().strip(), ent_room.get_text().strip())
+        if ent_manual.get_text().strip()
+        else client.set_connection_mode(ent_room.get_text().strip(), "", True)
     ))
-    fw_row.pack_start(btn_scan_net, True, True, 0)
-    fw_row.pack_start(btn_copy_ufw, False, False, 0)
 
-    manual_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=6)
-    entry_manual_ip = Gtk.Entry()
-    entry_manual_ip.set_text(cfg.get("manualPeer", ""))
-    entry_manual_ip.set_placeholder_text("IP do peer (aceita 192.168.1.x, .42, http:// ou ws://)")
-    btn_connect_ip = Gtk.Button(label="Conectar")
-    btn_connect_ip.get_style_context().add_class("btn-primary")
-    btn_auto_lan = Gtk.Button(label="Auto LAN")
-    btn_auto_lan.get_style_context().add_class("btn-secondary")
-    manual_row.pack_start(entry_manual_ip, True, True, 0)
-    manual_row.pack_start(btn_connect_ip, False, False, 0)
-    manual_row.pack_start(btn_auto_lan, False, False, 0)
+    btn_auto_mode = Gtk.Button(label="Modo Automático")
+    btn_auto_mode.get_style_context().add_class("btn-ghost")
+    btn_auto_mode.connect("clicked", lambda _w: (ent_manual.set_text(""), client.set_connection_mode(ent_room.get_text().strip(), "", True)))
 
-    peers_scroll = Gtk.ScrolledWindow()
-    peers_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    peers_listbox = Gtk.ListBox()
-    peers_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-    peers_scroll.add(peers_listbox)
+    manual_grid.pack_start(ent_room, False, False, 0)
+    manual_grid.pack_start(ent_manual, True, True, 0)
+    manual_grid.pack_start(btn_manual_conn, False, False, 0)
+    manual_grid.pack_start(btn_auto_mode, False, False, 0)
+    lan_card.pack_start(manual_grid, False, False, 0)
+    net_inner.pack_start(lan_card, False, False, 0)
 
-    lan_col.pack_start(lbl_lh, False, False, 0)
-    lan_col.pack_start(lbl_ls, False, False, 0)
-    lan_col.pack_start(fw_row, False, False, 0)
-    lan_col.pack_start(manual_row, False, False, 0)
-    lan_col.pack_start(peers_scroll, True, True, 0)
-    tab_net.pack_start(lan_col, True, True, 0)
+    # Telemetry & Alerts Card
+    sys_card = make_card(pad=18, spacing=12)
+    lbl_sysh = Gtk.Label(label="Telemetria em Tempo Real & Alertas")
+    lbl_sysh.set_xalign(0); lbl_sysh.get_style_context().add_class("section-title")
+    sys_card.pack_start(lbl_sysh, False, False, 0)
+    tel_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+    sys_card.pack_start(tel_box, False, False, 0)
 
-    alert_col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10)
-    alert_col.get_style_context().add_class("card")
-    alert_col.set_border_width(14)
-    lbl_ah = Gtk.Label(label="Alertas & Ponte OS")
-    lbl_ah.set_xalign(0)
-    lbl_ah.get_style_context().add_class("section-title")
-    ds = detect_display_server()
-    xdo_ok = "Ativo" if shutil.which("xdotool") else "Instale xdotool"
-    lbl_os_diag = Gtk.Label(label=f"Sessão: {ds.upper()} · Controle X11: {xdo_ok}")
-    lbl_os_diag.set_xalign(0)
-    lbl_os_diag.get_style_context().add_class("muted")
-    btn_send_alert = Gtk.Button(label="Enviar Alerta de Teste")
-    btn_send_alert.get_style_context().add_class("btn-secondary")
-    btn_send_alert.connect("clicked", lambda _w: client.send({
+    btn_alert_test = Gtk.Button(label="Enviar Alerta de Teste para Malha")
+    btn_alert_test.get_style_context().add_class("btn-ghost")
+    btn_alert_test.connect("clicked", lambda _w: client.send({
         "type": "notification:push",
         "title": f"Alerta de {HOSTNAME}",
-        "body": "Comunicação holográfica LAN ativa.",
+        "body": "Conexao direta LAN ativa.",
         "sourceDeviceId": DEVICE_ID,
         "sourceDeviceName": f"{HOSTNAME} (Linux)",
     }))
-    notif_scroll = Gtk.ScrolledWindow()
-    notif_scroll.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.AUTOMATIC)
-    notif_listbox = Gtk.ListBox()
-    notif_listbox.set_selection_mode(Gtk.SelectionMode.NONE)
-    notif_scroll.add(notif_listbox)
-    alert_col.pack_start(lbl_ah, False, False, 0)
-    alert_col.pack_start(lbl_os_diag, False, False, 0)
-    alert_col.pack_start(btn_send_alert, False, False, 0)
-    alert_col.pack_start(notif_scroll, True, True, 0)
-    tab_net.pack_start(alert_col, True, True, 0)
-    stack.add_named(tab_net, "network")
+    sys_card.pack_start(btn_alert_test, False, False, 0)
+    notif_box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6)
+    sys_card.pack_start(notif_box, False, False, 0)
+    net_inner.pack_start(sys_card, False, False, 0)
+    stack.add_named(net_scroll, "network")
 
-    btn_sel_ctrl.connect("clicked", lambda _w: switch_tab("remote"))
-    btn_sel_ping.connect("clicked", lambda _w: send_remote({"kind": "media", "action": "ping"}))
-    btn_sel_file.connect("clicked", choose_and_send_file)
-    btn_apply_room.connect("clicked", lambda _w: client.set_connection_mode(entry_room_top.get_text(), entry_manual_ip.get_text(), auto_lan=not bool(entry_manual_ip.get_text().strip())))
-    btn_connect_ip.connect("clicked", lambda _w: client.set_connection_mode(entry_room_top.get_text(), entry_manual_ip.get_text(), auto_lan=False))
-    btn_auto_lan.connect("clicked", lambda _w: (entry_manual_ip.set_text(""), client.set_connection_mode(entry_room_top.get_text(), "", auto_lan=True)))
+    # ==================== UI REFRESH HELPERS ====================
+    def clear_box(box):
+        for ch in box.get_children():
+            box.remove(ch)
 
-    def rebuild_clipboard(items):
-        for child in clip_listbox.get_children():
-            clip_listbox.remove(child)
-        for item in items[:25]:
-            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            box.get_style_context().add_class("card-subtle")
-            box.set_border_width(8)
-            txt = str(item.get("content", ""))
-            l1 = Gtk.Label(label=f"[{item.get('sourceDeviceName', 'Peer')}] {txt.replace(chr(10), ' ')[:110]}")
-            l1.set_xalign(0)
-            l1.set_line_wrap(True)
-            btn_c = Gtk.Button(label="Copiar")
-            btn_c.get_style_context().add_class("btn-secondary")
-            btn_c.connect("clicked", lambda _b, c=txt: (Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(c, -1), show_toast("Copiado!")))
-            box.pack_start(l1, True, True, 0)
-            box.pack_start(btn_c, False, False, 0)
-            clip_listbox.add(box)
-        clip_listbox.show_all()
-
-    def rebuild_lan_peers(peers):
-        for child in peers_listbox.get_children():
-            peers_listbox.remove(child)
-        if not peers:
-            lbl = Gtk.Label(label="Nenhum outro dispositivo encontrado ainda. Clique em Escanear Rede LAN Agora.")
-            lbl.set_line_wrap(True)
-            lbl.set_xalign(0)
-            lbl.get_style_context().add_class("muted")
-            peers_listbox.add(lbl)
+    def refresh_selected_bar():
+        tgt = get_target_device()
+        if tgt and tgt.get("id") != DEVICE_ID:
+            tel = tgt.get("telemetry") or {}
+            lbl_map_sel.set_text(f"Alvo ativo: {tgt.get('name')} ({str(tgt.get('os','')).upper()}) · CPU {tel.get('cpuUsage',0)}% · RAM {tel.get('memoryUsagePercent',0)}%")
+            lbl_rem_target.set_text(f"Controlando: {tgt.get('name')} ({str(tgt.get('os','')).upper()})")
         else:
+            lbl_map_sel.set_text("Nenhum outro dispositivo conectado ainda · Abra o Continuum no Tablet/Windows no mesmo Wi-Fi.")
+            lbl_rem_target.set_text("Alvo: aguardando outro dispositivo na rede Wi-Fi...")
+
+    def refresh_lan_peers_ui():
+        clear_box(lan_peers_box)
+        peers = state["lan_peers"]
+        if not peers:
+            lbl = Gtk.Label(label="Nenhum dispositivo detectado ainda. Clique em Escanear Sub-Rede Wi-Fi.")
+            lbl.set_xalign(0); lbl.get_style_context().add_class("muted")
+            lan_peers_box.pack_start(lbl, False, False, 0)
+        else:
+            joined_ips = {d.get("lanIp") for d in state["devices"]}
+            joined_ids = {d.get("id") for d in state["devices"]}
             for p in peers:
-                box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-                box.get_style_context().add_class("card-subtle")
-                box.set_border_width(8)
-                vbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-                l1 = Gtk.Label(label=f"{p.get('hubName')} ({str(p.get('os','')).upper()})")
-                l1.set_xalign(0)
-                l2 = Gtk.Label(label=f"{p.get('ip')}:{p.get('wsPort')} · {p.get('via', 'LAN')} · {p.get('roomCode')}")
-                l2.set_xalign(0)
-                l2.get_style_context().add_class("mono")
-                vbox.pack_start(l1, False, False, 0)
-                vbox.pack_start(l2, False, False, 0)
-                btn_conn = Gtk.Button(label="Conectar")
-                btn_conn.get_style_context().add_class("btn-primary")
-                ep = f"{p.get('ip')}:{p.get('wsPort')}"
-                btn_conn.connect("clicked", lambda _b, e=ep, rm=p.get("roomCode"): (
-                    entry_room_top.set_text(rm),
-                    entry_manual_ip.set_text(e),
-                    client.set_connection_mode(rm, e, auto_lan=False),
-                ))
-                box.pack_start(vbox, True, True, 0)
-                box.pack_start(btn_conn, False, False, 0)
-                peers_listbox.add(box)
-        peers_listbox.show_all()
+                is_joined = p["ip"] in joined_ips or p["hubId"] in joined_ids or client.connected_url == f"ws://{p['ip']}:{p['wsPort']}/ws"
+                row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+                row.get_style_context().add_class("card-subtle")
+                row.set_border_width(12)
+                info = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
+                t1 = Gtk.Label(label=f"{p['hubName']} ({p['os'].upper()})")
+                t1.set_xalign(0)
+                t2 = Gtk.Label(label=f"{p['ip']}:{p['wsPort']} · {p.get('via','LAN')} · Malha {p['roomCode']}")
+                t2.set_xalign(0); t2.get_style_context().add_class("mono")
+                info.pack_start(t1, False, False, 0)
+                info.pack_start(t2, False, False, 0)
+                row.pack_start(info, True, True, 0)
+                if is_joined and client.connected:
+                    st = Gtk.Label(label="Conectado")
+                    st.get_style_context().add_class("status-ok")
+                    row.pack_start(st, False, False, 6)
+                else:
+                    bc = Gtk.Button(label="Conectar")
+                    bc.get_style_context().add_class("btn-primary")
+                    bc.connect("clicked", lambda _w, ip=p["ip"], pt=p["wsPort"], rm=p["roomCode"]: (
+                        ent_manual.set_text(f"{ip}:{pt}"),
+                        client.connect_to_peer(f"{ip}:{pt}", rm),
+                    ))
+                    row.pack_start(bc, False, False, 0)
+                lan_peers_box.pack_start(row, False, False, 0)
+        lan_peers_box.show_all()
 
-    def rebuild_notifications(items):
-        for child in notif_listbox.get_children():
-            notif_listbox.remove(child)
-        for n in items[:25]:
-            box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2)
-            box.get_style_context().add_class("card-subtle")
-            box.set_border_width(8)
-            l1 = Gtk.Label(label=f"{n.get('title', 'Alerta')} · {n.get('sourceDeviceName', '')}")
+    def refresh_telemetry_ui():
+        clear_box(tel_box)
+        for d in state["devices"]:
+            tel = d.get("telemetry") or {}
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=12)
+            row.get_style_context().add_class("card-subtle")
+            row.set_border_width(10)
+            bat = f" · Bateria {tel.get('batteryLevel')}%" if tel.get("batteryLevel") is not None else ""
+            l1 = Gtk.Label(label=f"{d.get('name')} ({str(d.get('os','')).upper()})")
             l1.set_xalign(0)
-            l2 = Gtk.Label(label=str(n.get("body", "")))
-            l2.set_xalign(0)
-            l2.set_line_wrap(True)
-            l2.get_style_context().add_class("muted")
-            box.pack_start(l1, False, False, 0)
-            box.pack_start(l2, False, False, 0)
-            notif_listbox.add(box)
-        notif_listbox.show_all()
+            l2 = Gtk.Label(label=f"CPU {tel.get('cpuUsage',0)}% · RAM {tel.get('memoryUsagePercent',0)}%{bat}")
+            l2.get_style_context().add_class("mono")
+            row.pack_start(l1, True, True, 0)
+            row.pack_start(l2, False, False, 0)
+            tel_box.pack_start(row, False, False, 0)
+        tel_box.show_all()
 
-    def add_file_history(rec):
-        state["file_history"].insert(0, rec)
-        for child in file_listbox.get_children():
-            file_listbox.remove(child)
-        for f in state["file_history"][:20]:
-            box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
-            box.get_style_context().add_class("card-subtle")
-            box.set_border_width(8)
-            tag = "Enviado" if f.get("dir") == "send" else "Recebido"
-            kb = max(1, round(int(f.get("size", 0)) / 1024))
-            l1 = Gtk.Label(label=f"{tag}: {f.get('name')} ({kb} KB)")
-            l1.set_xalign(0)
-            box.pack_start(l1, True, True, 0)
-            file_listbox.add(box)
-        file_listbox.show_all()
+    def refresh_clipboard_ui(items):
+        clear_box(clip_list_box)
+        for it in items[:15]:
+            row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+            row.get_style_context().add_class("card-subtle")
+            row.set_border_width(10)
+            txt = str(it.get("content") or "")
+            lbl = Gtk.Label(label=f"[{it.get('sourceDeviceName','Peer')}] {txt[:110]}")
+            lbl.set_xalign(0); lbl.set_line_wrap(True)
+            bc = Gtk.Button(label="Copiar")
+            bc.get_style_context().add_class("btn-ghost")
+            bc.connect("clicked", lambda _w, c=txt: (state.__setitem__("last_clip_text", c), Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(c, -1)))
+            row.pack_start(lbl, True, True, 0)
+            row.pack_start(bc, False, False, 0)
+            clip_list_box.pack_start(row, False, False, 0)
+        clip_list_box.show_all()
 
+    def refresh_notifs_ui(items):
+        clear_box(notif_box)
+        for n in items[:10]:
+            lbl = Gtk.Label(label=f"[{n.get('sourceDeviceName','Peer')}] {n.get('title','')}: {n.get('body','')}")
+            lbl.set_xalign(0); lbl.set_line_wrap(True)
+            lbl.get_style_context().add_class("muted")
+            notif_box.pack_start(lbl, False, False, 0)
+        notif_box.show_all()
+
+    # ==================== TIMERS: 60FPS ANIMATION + AUTO CLIPBOARD + EDGE KVM ====================
     def tick_animation():
-        state["phase"] = (state["phase"] + 0.033) % 1000.0
-        if state["active_tab"] == "map":
+        now = time.monotonic()
+        dt = min(0.05, max(0.005, now - state["last_frame"]))
+        state["last_frame"] = now
+        state["phase"] = (state["phase"] + dt) % 1000.0
+        cur = stack.get_visible_child_name()
+        if cur == "map":
             map_canvas.queue_draw()
-        elif state["active_tab"] == "remote" and (state["tp_ripples"] or state["tp_trail"]):
-            tp_canvas.queue_draw()
+        elif cur == "remote" and (state["track_ripples"] or state["track_trail"] or state["track_cursor"]):
+            pad_area.queue_draw()
+        return True
+
+    def tick_auto_clipboard():
+        if state["auto_clip"] and client.connected:
+            try:
+                txt = (Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).wait_for_text() or "").strip()
+                if txt and txt != state["last_clip_text"]:
+                    state["last_clip_text"] = txt
+                    client.send({
+                        "type": "clipboard:push",
+                        "content": txt,
+                        "sourceDeviceId": DEVICE_ID,
+                        "sourceDeviceName": f"{HOSTNAME} (Linux)",
+                        "auto": True,
+                    })
+            except Exception:
+                pass
+        return True
+
+    def tick_edge_kvm():
+        if not state["kvm_edge_enabled"] or not client.connected:
+            return True
+        tgt = get_target_device()
+        if not tgt or tgt.get("id") == DEVICE_ID:
+            return True
         try:
-            while True:
-                etype, data = event_queue.get_nowait()
-                if etype == "status":
-                    st = data.get("state")
-                    hub = data.get("hub", "LAN")
-                    ctx_s = lbl_conn_status.get_style_context()
-                    if st == "connected":
-                        ctx_s.remove_class("status-cyan")
-                        ctx_s.add_class("status-ok")
-                        rtt_str = f" · {client.rtt_ms} ms" if client.rtt_ms else ""
-                        lbl_conn_status.set_text(f"● {hub}{rtt_str}")
-                    else:
-                        ctx_s.remove_class("status-ok")
-                        ctx_s.add_class("status-cyan")
-                        lbl_conn_status.set_text(f"◌ Conectando ({hub})...")
-                elif etype == "scan":
-                    state["scanning"] = bool(data.get("scanning"))
-                    state["scan_pct"] = int(data.get("pct", 0))
-                    if state["scanning"]:
-                        show_toast(f"Radar Wi-Fi escaneando rede local... {state['scan_pct']}%")
-                    else:
-                        show_toast(f"Varredura concluída · {len(state['lan_peers'])} peer(s) detectado(s) na rede local.")
-                elif etype == "rtt":
-                    if client.connected:
-                        lbl_conn_status.set_text(f"● {client.connected_hub_label} · {data} ms")
-                elif etype == "devices":
-                    state["devices"] = data
-                    if not state["selected_id"]:
-                        other = next((d for d in data if d.get("id") != DEVICE_ID), None)
-                        if other:
-                            state["selected_id"] = other.get("id")
-                    lbl_hub_meta.set_text(f"Malha {cfg.get('roomCode')} · {len(data)} nó(s)")
-                    update_selected_bar()
-                elif etype == "clipboard":
-                    rebuild_clipboard(data)
-                elif etype == "notifications":
-                    rebuild_notifications(data)
-                elif etype == "lan_peers":
-                    state["lan_peers"] = data
-                    rebuild_lan_peers(data)
-                elif etype == "file_progress":
-                    pct = max(0, min(100, int(data.get("pct", 0))))
-                    file_progress.set_fraction(pct / 100.0)
-                    verb = "Enviando" if data.get("dir") == "send" else "Recebendo"
-                    file_progress.set_text(f"{verb} {data.get('name')} · {pct}%")
-                elif etype == "file_done":
-                    file_progress.set_fraction(1.0)
-                    file_progress.set_text(f"Concluído: {data.get('name')}")
-                    add_file_history(data)
-                elif etype == "toast":
-                    show_toast(str(data))
-        except queue.Empty:
+            disp = Gdk.Display.get_default()
+            seat = disp.get_default_seat()
+            ptr = seat.get_pointer()
+            _scr, px, py = ptr.get_position()
+            mw, mh = _active_mon_geom["w"], _active_mon_geom["h"]
+            side = state["kvm_edge_side"]
+            hit = (
+                (side == "right" and px >= mw - 2)
+                or (side == "left" and px <= 1)
+                or (side == "top" and py <= 1)
+                or (side == "bottom" and py >= mh - 2)
+            )
+            if hit:
+                # Forward subtle relative nudge when pushing against monitor border
+                dx = 12 if side == "right" else (-12 if side == "left" else 0)
+                dy = 12 if side == "bottom" else (-12 if side == "top" else 0)
+                send_remote({"kind": "move", "dx": dx, "dy": dy})
+        except Exception:
             pass
         return True
 
-    switch_tab("map")
-    rebuild_lan_peers([])
-    win.connect("destroy", lambda *_a: (client.stop(), Gtk.main_quit()))
-    win.show_all()
+    def poll_events():
+        while True:
+            try:
+                etype, data = events.get_nowait()
+            except queue.Empty:
+                break
+            if etype == "status":
+                st = data.get("state")
+                hub = data.get("hub", "LAN")
+                sc = lbl_side_status.get_style_context()
+                sc.remove_class("status-ok"); sc.remove_class("status-warn")
+                if st == "connected":
+                    lbl_side_status.set_text(f"Conectado · {hub}")
+                    sc.add_class("status-ok")
+                else:
+                    lbl_side_status.set_text(f"Conectando · {hub}...")
+                    sc.add_class("status-warn")
+                refresh_lan_peers_ui()
+            elif etype == "rtt":
+                lbl_top_rtt.set_text(f"{data} ms · LAN Direta")
+            elif etype == "room_synced":
+                ent_room.set_text(str(data))
+                lbl_side_room.set_text(f"Malha: {data}")
+            elif etype == "scan":
+                state["scanning"] = bool(data.get("scanning"))
+                state["scan_pct"] = int(data.get("pct") or 0)
+                btn_top_scan.set_label(f"Escaneando {state['scan_pct']}%" if state["scanning"] else "Escanear Wi-Fi")
+            elif etype == "lan_peers":
+                state["lan_peers"] = data or []
+                refresh_lan_peers_ui()
+            elif etype == "devices":
+                state["devices"] = data or []
+                if not state["selected_id"]:
+                    other = next((d for d in state["devices"] if d.get("id") != DEVICE_ID), None)
+                    if other:
+                        state["selected_id"] = other["id"]
+                cnt = len(state["devices"])
+                lbl_side_count.set_text(f"{cnt} {'dispositivo' if cnt == 1 else 'dispositivos'} online")
+                refresh_selected_bar()
+                refresh_telemetry_ui()
+                refresh_lan_peers_ui()
+                map_canvas.queue_draw()
+            elif etype == "clipboard":
+                refresh_clipboard_ui(data or [])
+            elif etype == "clipboard_remote_sync":
+                if state["auto_clip"] and data and data != state["last_clip_text"]:
+                    state["last_clip_text"] = data
+                    try:
+                        Gtk.Clipboard.get(Gdk.SELECTION_CLIPBOARD).set_text(data, -1)
+                    except Exception:
+                        pass
+            elif etype == "notifications":
+                refresh_notifs_ui(data or [])
+            elif etype == "screen:request":
+                req_from = data.get("sourceDeviceId")
+                if not state["streaming_out"]:
+                    switch_page("screen")
+                    start_screen_stream(explicit_target_id=req_from)
+            elif etype == "screen:frame":
+                if not state["streaming_out"] and data.get("data"):
+                    try:
+                        raw = base64.b64decode(data["data"])
+                        loader = GdkPixbuf.PixbufLoader.new_with_type("jpeg")
+                        loader.write(raw)
+                        loader.close()
+                        state["rx_pixbuf"] = loader.get_pixbuf()
+                        rx_canvas.queue_draw()
+                    except Exception:
+                        pass
+            elif etype == "screen:stop":
+                if not state["streaming_out"]:
+                    state["rx_pixbuf"] = None
+                    rx_canvas.queue_draw()
+            elif etype == "file_progress":
+                lbl_file_status.set_text(f"{'Enviando' if data['dir']=='send' else 'Recebendo'} {data['name']} · {data['pct']}%")
+                prog_file.set_fraction(max(0.0, min(1.0, data["pct"] / 100.0)))
+            elif etype == "file_done":
+                lbl_file_status.set_text(f"Concluído: {data['name']}")
+                row = Gtk.Label(label=f"{'Enviado' if data['dir']=='send' else 'Recebido'}: {data['name']} ({max(1, int(data['size']//1024))} KB)")
+                row.set_xalign(0); row.get_style_context().add_class("muted")
+                file_hist_box.pack_start(row, False, False, 0)
+                file_hist_box.show_all()
+            elif etype == "toast":
+                lbl_top_rtt.set_text(str(data)[:46])
+        return True
+
+    def on_destroy(_w):
+        stop_screen_stream()
+        client.stop()
+        Gtk.main_quit()
+
+    win.connect("destroy", on_destroy)
+    switch_page("map")
     client.start()
     GLib.timeout_add(33, tick_animation)
+    GLib.timeout_add(60, poll_events)
+    GLib.timeout_add(850, tick_auto_clipboard)
+    GLib.timeout_add(90, tick_edge_kvm)
+    win.show_all()
     Gtk.main()
 
 
-def run_tk_app(cfg, start_hub=True):
-    import tkinter as tk
-    event_queue = queue.Queue()
-    client = ContinuumMeshClient(cfg, event_queue, start_hub=start_hub)
-    root = tk.Tk()
-    root.title(f"Continuum {APP_VERSION} — Malha Holográfica LAN")
-    root.geometry("920x620")
-    root.configure(bg="#050810")
-    top = tk.Frame(root, bg="#0A101E", pady=10, padx=14)
-    top.pack(fill="x")
-    tk.Label(top, text=f"CONTINUUM v{APP_VERSION} · LAN {get_local_lan_ip()}:{client.hub.port}", fg="#22D3EE", bg="#0A101E", font=("Sans", 12, "bold")).pack(side="left")
-    lbl_st = tk.Label(top, text="Conectando...", fg="#22D3EE", bg="#0A101E")
-    lbl_st.pack(side="right")
-    dev_list = tk.Listbox(root, bg="#0E1628", fg="#F1F5F9", selectbackground="#3B82F6", borderwidth=0)
-    dev_list.pack(fill="both", expand=True, padx=14, pady=14)
-
-    def poll():
-        try:
-            while True:
-                etype, data = event_queue.get_nowait()
-                if etype == "status":
-                    lbl_st.config(text=f"{data.get('state')} · {data.get('hub')}", fg="#10B981" if data.get("state") == "connected" else "#22D3EE")
-                elif etype == "devices":
-                    dev_list.delete(0, "end")
-                    for d in data:
-                        dev_list.insert("end", f"{d.get('name')} ({d.get('os')}) — CPU {d.get('telemetry', {}).get('cpuUsage', 0)}%")
-        except queue.Empty:
-            pass
-        root.after(150, poll)
-
-    root.protocol("WM_DELETE_WINDOW", lambda: (client.stop(), root.destroy()))
-    client.start()
-    root.after(150, poll)
-    root.mainloop()
-
-
-def show_fatal_dialog(message):
-    log_msg(f"FATAL: {message}")
-    if shutil.which("zenity"):
-        run_cmd(["zenity", "--error", "--title=Continuum", "--text=" + message, "--width=420"])
-    elif shutil.which("kdialog"):
-        run_cmd(["kdialog", "--error", message, "--title", "Continuum"])
-    print(f"[Continuum] {message}", file=sys.stderr)
+def show_visible_error(msg):
+    log_msg(f"ERRO FATAL: {msg}")
+    sys.stderr.write(msg + "\\n")
+    for cmd in (["zenity", "--error", "--title=Continuum", f"--text={msg}"], ["kdialog", "--error", msg]):
+        if shutil.which(cmd[0]):
+            try:
+                subprocess.Popen(cmd)
+                return
+            except Exception:
+                pass
 
 
 def main():
-    cfg = load_config()
     args = sys.argv[1:]
-    headless = "--bridge-only" in args
-    hub_only = "--hub-only" in args
-
-    for i, a in enumerate(args):
-        if a == "--room" and i + 1 < len(args):
-            cfg["roomCode"] = args[i + 1].upper()
-        elif a == "--connect" and i + 1 < len(args):
-            cfg["manualPeer"] = args[i + 1]
-            cfg["autoLan"] = False
-        elif a == "--port" and i + 1 < len(args):
+    cfg = load_config()
+    hub_only = False
+    i = 0
+    while i < len(args):
+        if args[i] == "--hub-only":
+            hub_only = True
+        elif args[i] == "--room" and i + 1 < len(args):
+            cfg["roomCode"] = args[i + 1].upper()[:12]
+            i += 1
+        elif args[i] == "--port" and i + 1 < len(args):
             cfg["wsPort"] = int(args[i + 1])
+            i += 1
+        i += 1
 
     if hub_only:
         hub = EmbeddedLanHub(port=int(cfg.get("wsPort") or LAN_WS_PORT), get_room_fn=lambda: cfg.get("roomCode", DEFAULT_ROOM_CODE))
-        ok = hub.start()
+        hub.start()
         disc = LanDiscoveryService(hub, lambda: cfg.get("roomCode", DEFAULT_ROOM_CODE))
         disc.start()
-        print(f"[Continuum] Hub LAN v{APP_VERSION} ativo={ok} em {get_local_lan_ip()}:{hub.port} (malha {cfg.get('roomCode')})", flush=True)
+        print(f"Continuum LAN Hub v{APP_VERSION} ativo em {get_local_lan_ip()}:{hub.port} (malha {cfg['roomCode']})", flush=True)
         try:
             while True:
-                time.sleep(1.0)
+                time.sleep(1)
         except KeyboardInterrupt:
             disc.stop()
             hub.stop()
         return
 
-    if headless:
-        eq = queue.Queue()
-        start_hub = not bool(cfg.get("manualPeer"))
-        client = ContinuumMeshClient(cfg, eq, start_hub=start_hub)
-        client.start()
-        print(f"[Continuum] Cliente headless v{APP_VERSION} iniciado (id={DEVICE_ID}, room={cfg.get('roomCode')})", flush=True)
-        try:
-            while True:
-                try:
-                    etype, data = eq.get(timeout=0.5)
-                    if etype in ("status", "devices", "clipboard", "rtt"):
-                        print(f"[EVENT] {etype}: {json.dumps(data, ensure_ascii=False)[:220]}", flush=True)
-                except queue.Empty:
-                    pass
-        except KeyboardInterrupt:
-            client.stop()
-        return
-
     try:
         run_gtk_app(cfg, start_hub=True)
-    except Exception as gtk_exc:
-        log_msg(f"GTK 3 indisponivel ({gtk_exc}); tentando fallback Tkinter...")
-        try:
-            run_tk_app(cfg, start_hub=True)
-        except Exception as tk_exc:
-            show_fatal_dialog(f"Não foi possível abrir a interface gráfica do Continuum.\\n\\nGTK 3: {gtk_exc}\\nTkinter: {tk_exc}")
-            sys.exit(1)
+    except Exception as exc:
+        show_visible_error(f"Nao foi possivel iniciar a interface GTK 3 do Continuum:\\n{exc}\\n\\nInstale: sudo apt install python3-gi gir1.2-gtk-3.0")
 
 
 if __name__ == "__main__":

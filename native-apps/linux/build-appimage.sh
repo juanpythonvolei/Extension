@@ -58,7 +58,7 @@ Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
 StartupWMClass=continuum_app.py
-X-AppImage-Version=4.0.0
+X-AppImage-Version=5.0.0
 EOF
 chmod 644 "$APPDIR/continuum.desktop"
 cp "$APPDIR/continuum.desktop" "$APPDIR/usr/share/applications/continuum.desktop"

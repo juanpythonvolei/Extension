@@ -69,7 +69,7 @@ INSTALLED_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: continuum-mesh
-Version: 4.0.0
+Version: 5.0.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -78,10 +78,10 @@ Depends: python3, python3-gi, gir1.2-gtk-3.0
 Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
 Homepage: ${serverUrl}
-Description: Continuum 4.0 - Aplicativo Nativo Linux Holografico (GTK 3 + Radar Auto LAN)
- Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com interface holografica,
- descoberta automatica LAN em 3 camadas (UDP Unicast + Radar TCP /24 + Hub 45891),
- mapa espacial com medidores radiais CPU/RAM, trackpad tatil com rastro luminoso e arquivos.
+Description: Continuum 5.0 - Aplicativo Nativo Linux (Extensao de Tela + KVM + Clipboard Auto)
+ Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com 5 espacos de trabalho,
+ Extensao de Monitor/Segunda Tela em tempo real via LAN, Mouse e Teclado Continuo (KVM),
+ Area de Transferencia Universal Automatica e protocolo LAN Zero-Loop v5.0.
 EOF
 chmod 644 "$STAGE/DEBIAN/control"
 
@@ -174,7 +174,7 @@ Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
 StartupWMClass=continuum_app.py
-X-AppImage-Version=4.0.0
+X-AppImage-Version=5.0.0
 EOF
 chmod 644 "$APPDIR/continuum.desktop"
 cp "$APPDIR/continuum.desktop" "$APPDIR/usr/share/applications/continuum.desktop"
@@ -237,21 +237,21 @@ export function buildNativeRepoEntries(ctx: InstallerContext): ZipEntryInput[] {
   const room = safeStr(ctx.roomCode);
   const serverUrl = safeStr(ctx.appUrl).replace(/\/+$/, '');
 
-  const readmeMd = `# Continuum v4.0 — Interface Holográfica & Radar Automático LAN (Linux, Windows e Android)
+  const readmeMd = `# Continuum v5.0 — Extensão de Tela, KVM Contínuo, Clipboard Automático & Malha Zero-Loop (Linux, Windows e Android)
 
-Este repositório compila **aplicativos 100% nativos** — **sem WebView, sem Electron e sem depender do app web** — com interface **holográfica 60 FPS** (radar espacial animado, feixes de dados luminosos, medidores radiais CPU/RAM e trackpad com rastro de luz) e **descoberta automática em 3 camadas no Wi-Fi**:
+Este repositório compila **aplicativos 100% nativos** — **sem WebView, sem Electron e sem depender do app web** — com interface **holográfica espaçosa em 5 áreas de trabalho** (incluindo barra lateral nativa para Tablets Android) e **protocolo direto LAN Zero-Loop v5.0**:
 
 | Plataforma | Tecnologia Nativa Real | Artefatos Compilados (Releases) |
 | --- | --- | --- |
-| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 + Cairo 60 FPS** + Radar LAN 3 Camadas + Hub 45891 | \`Continuum-Linux-x86_64.AppImage\` (Zero-FUSE) + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
-| **Windows 10 / 11** | **C# .NET 8 WinForms + GDI+ 60 FPS** + Radar LAN + Win32 | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
-| **Android (Celular e Tablet)** | **Kotlin + Canvas Holográfico + Hub Embutido + Radar TCP/UDP** | \`Continuum-Android.apk\` |
+| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 + Cairo 60 FPS** + Extensão de Tela + KVM + Hub 45891 | \`Continuum-Linux-x86_64.AppImage\` (Zero-FUSE) + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
+| **Windows 10 / 11** | **C# .NET 8 WinForms + GDI+ 60 FPS** + High-DPI + Extensão de Tela | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
+| **Android (Celular e Tablet)** | **Kotlin + Canvas Holográfico + Segunda Tela + Hub Embutido** | \`Continuum-Android.apk\` |
 
-## Conexão Direta e Automática em 3 Camadas (Sem App Web)
+## Novidades da v5.0 (Zero-Loop + Paridade Completa com o Web App)
 
-1. **UDP Ativo Bidirecional (45890):** Broadcast global + sub-rede \`/24\` + Multicast \`239.255.45.90\` com resposta **Unicast imediata** (contorna filtros de broadcast do Android).
-2. **Radar TCP Paralelo (\`/24\` na porta 45891):** Escaneia automaticamente a rede Wi-Fi inteira em ~1,4s via \`/continuum-info\`, encontrando PCs mesmo quando o roteador bloqueia UDP.
-3. **Hub WebSocket Embutido nos 3 Sistemas (inclusive Android):** Se o firewall do PC bloquear entrada na porta \`45891\`, o PC descobre o Android e conecta de saída automaticamente. Além disso, o campo manual aceita \`http://ip:porta\`, \`ws://ip:porta\`, \`ip:porta\`, \`ip\` ou apenas \`.42\`.
+1. **Conexão Direta Zero-Loop (Tablet ↔ PC):** Trava inteligente de Hub com peers ativos, sonda TCP \`/continuum-info\` pré-conexão (sincroniza a sala automaticamente), descarte de sockets antigos e fallback limpo após 2 falhas — eliminando ciclos infinitos de conexão/reconexão.
+2. **Extensão de Monitor / Segunda Tela Nativa:** Streaming direto de tela JPEG pela LAN (Linux GDK/grim, Windows GDI+ CopyFromScreen) para Android Tablet/Celular ou outro PC, com toque direto no cursor do PC e modo Tela Cheia.
+3. **Teclado & Mouse Contínuo (KVM) + Área de Transferência Universal Automática:** Troca por borda de tela, trackpad holográfico com botões dedicados, atalhos (\`Alt+Tab\`, \`Ctrl+C/V\`, mídia) e sincronização automática bidirecional do Clipboard do sistema.
 
 - **Malha padrão:** \`${room}\`
 `;
@@ -428,14 +428,15 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: \${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
-          name: Continuum Native Apps v4.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Holográfico + Radar LAN' }})
+          name: Continuum Native Apps v5.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Extensão de Tela + KVM + Zero-Loop' }})
           make_latest: true
           body: |
-            ## Continuum v4.0 — Interface Holográfica & Conexão LAN Automática em 3 Camadas
+            ## Continuum v5.0 — Extensão de Tela, KVM Contínuo, Clipboard Automático & LAN Zero-Loop
 
-            - **Descoberta Automática Ultra-Fluida:** UDP ativo com resposta Unicast + Radar TCP paralelo (\`/24\` em ~1,4s) + Hub WebSocket embutido em **Linux, Windows e Android** (contorna bloqueios de UDP do roteador e firewall local).
-            - **Conexão Manual Inteligente:** Aceita \`http://ip:porta\`, \`https://...\`, \`ws://...\`, \`ip:porta\`, \`ip\` ou atalho \`.42\` (completa sua sub-rede automaticamente).
-            - **Nova UI Holográfica 60 FPS:** Radar varredor animado, feixes de dados com pacotes de energia, cards translúcidos com medidores radiais de CPU/RAM e Trackpad Holográfico com rastro luminoso e ondas de toque.
+            - **Fim do Ciclo de Reconexão (Protocolo Zero-Loop v5.0):** Trava de Hub por peer ativo, sonda TCP \`/continuum-info\` antes de conectar, reassembly completo de frames RFC-6455 (até 32 MB) e fallback automático para o Hub local.
+            - **Extensão de Monitor / Segunda Tela Nativa:** Transmita qualquer monitor Linux ou Windows diretamente pela rede local para o Tablet/Celular Android ou outro PC com controle por toque direto e modo Tela Cheia.
+            - **Mouse & Teclado Contínuo (KVM) + Clipboard Automático:** Borda de tela contínua, trackpad holográfico espaçoso com atalhos de sistema e área de transferência universal sincronizada automaticamente nos 3 sistemas.
+            - **UI Lapidada em 5 Espaços de Trabalho:** Layout limpo, sem botões espremidos, com barra lateral responsiva em Tablets Android e High-DPI PerMonitorV2 no Windows.
 
             ### Artefatos Compilados
             - **Linux AppImage Universal Zero-FUSE (GTK 3 + Cairo 60 FPS):** \`Continuum-Linux-x86_64.AppImage\`
@@ -443,7 +444,7 @@ jobs:
             - **Linux Portátil:** \`Continuum-Linux-Portable.tar.gz\`
             - **Windows 10/11 (Instalador NSIS — C# .NET 8 + GDI+ 60 FPS):** \`Continuum-Windows-Setup.exe\`
             - **Windows 10/11 (Executável Único — C# .NET 8 + GDI+ 60 FPS):** \`Continuum-Windows.exe\`
-            - **Android (Kotlin + Canvas Holográfico + Hub LAN + Radar TCP/UDP):** \`Continuum-Android.apk\`
+            - **Android (Kotlin + Segunda Tela + Barra Lateral Tablet + Hub LAN):** \`Continuum-Android.apk\`
           files: release-assets/*
 `;
 
