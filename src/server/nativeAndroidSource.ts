@@ -304,7 +304,7 @@ private fun holoGradientButton(ctx: Context, radiusDp: Float = 12f): GradientDra
 
 private fun getLocalLanIp(): String {
     try {
-        val interfaces = NetworkInterface.getNetworkInterfaces()
+        val interfaces = NetworkInterface.getNetworkInterfaces() ?: return "127.0.0.1"
         var fallback: String? = null
         while (interfaces.hasMoreElements()) {
             val ni = interfaces.nextElement()
@@ -752,6 +752,7 @@ class HolographicSpatialMapView(context: Context) : View(context) {
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (width <= 4 || height <= 4) return
         val now = SystemClock.uptimeMillis()
         val dt = ((now - lastFrameMs).coerceIn(1L, 50L)) / 1000f
         lastFrameMs = now
@@ -995,6 +996,7 @@ class HolographicTrackpadView(
 
     override fun onDraw(canvas: Canvas) {
         super.onDraw(canvas)
+        if (width <= 4 || height <= 4) return
         bgPaint.shader = RadialGradient(width / 2f, height / 2f, max(width, height) * 0.7f, Color.parseColor("#0C162A"), C_VOID, Shader.TileMode.CLAMP)
         canvas.drawRect(0f, 0f, width.toFloat(), height.toFloat(), bgPaint)
 
@@ -1530,7 +1532,8 @@ class MainActivity : AppCompatActivity() {
         }
         val bGrab = makeHoloBtn("Colar") {
             val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            val txt = cm.primaryClip?.getItemAt(0)?.coerceToText(this)?.toString()
+            val clip = cm.primaryClip
+            val txt = if (clip != null && clip.itemCount > 0) clip.getItemAt(0)?.coerceToText(this)?.toString() else null
             if (!txt.isNullOrBlank()) pushClipboard(txt) else toast("Clipboard vazio.")
         }
         cRow.addView(editClip, LinearLayout.LayoutParams(0, dpToPx(this, 44), 1f))

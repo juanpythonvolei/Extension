@@ -397,7 +397,8 @@ jobs:
           if [ -n "$INPUT_ROOM" ]; then
             EXTRA_ARGS="$EXTRA_ARGS -ProomCode=$INPUT_ROOM"
           fi
-          gradle assembleDebug $EXTRA_ARGS --no-daemon
+          rm -rf app/src/main/java/app/continuum/mesh
+          gradle assembleDebug $EXTRA_ARGS --no-daemon --stacktrace
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/Continuum-Android.apk
           ls -lh dist/
@@ -494,6 +495,10 @@ export function buildNativeRepoZip(ctx: InstallerContext): Buffer {
  * this project to GitHub automatically compiles all 3 native OS applications!
  */
 export function materializeWorkspaceNativeApps(workspaceRoot: string, ctx: InstallerContext): number {
+  const androidJavaDir = path.join(workspaceRoot, 'native-apps', 'android', 'app', 'src', 'main', 'java');
+  if (fs.existsSync(androidJavaDir)) {
+    fs.rmSync(androidJavaDir, { recursive: true, force: true });
+  }
   const entries = buildNativeRepoEntries(ctx).filter((e) => e.name !== 'README.md');
   for (const entry of entries) {
     const dest = path.join(workspaceRoot, entry.name);

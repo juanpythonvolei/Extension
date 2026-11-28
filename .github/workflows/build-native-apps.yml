@@ -139,7 +139,8 @@ jobs:
           if [ -n "$INPUT_ROOM" ]; then
             EXTRA_ARGS="$EXTRA_ARGS -ProomCode=$INPUT_ROOM"
           fi
-          gradle assembleDebug $EXTRA_ARGS --no-daemon
+          rm -rf app/src/main/java/app/continuum/mesh
+          gradle assembleDebug $EXTRA_ARGS --no-daemon --stacktrace
           mkdir -p dist
           cp app/build/outputs/apk/debug/app-debug.apk dist/Continuum-Android.apk
           ls -lh dist/
