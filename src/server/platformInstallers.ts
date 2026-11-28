@@ -1294,7 +1294,29 @@ export function buildLinuxAppImage(ctx: InstallerContext): Buffer {
 set -e
 HERE="$(dirname "$(readlink -f "$0")")"
 export APPDIR="\${APPDIR:-$HERE}"
-exec python3 "$HERE/usr/share/continuum/continuum_app.py" "$@"
+
+PY=""
+for cand in /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 2>/dev/null || true)"; do
+  if [ -n "$cand" ] && [ -x "$cand" ] && "$cand" -c "import gi; gi.require_version('Gtk','3.0'); from gi.repository import Gtk" >/dev/null 2>&1; then
+    PY="$cand"
+    break
+  fi
+done
+
+if [ -z "$PY" ]; then
+  for cand in /usr/bin/python3 /usr/local/bin/python3 "$(command -v python3 2>/dev/null || true)"; do
+    if [ -n "$cand" ] && [ -x "$cand" ] && "$cand" -c "import tkinter" >/dev/null 2>&1; then
+      PY="$cand"
+      break
+    fi
+  done
+fi
+
+if [ -z "$PY" ]; then
+  PY="$(command -v python3 2>/dev/null || echo /usr/bin/python3)"
+fi
+
+exec "$PY" "$HERE/usr/share/continuum/continuum_app.py" "$@"
 `;
 
   const desktopEntry = `[Desktop Entry]

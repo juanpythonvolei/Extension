@@ -89,6 +89,8 @@ static int extract_payload_to(int self_fd, uint64_t offset, uint64_t size, const
     close(pipefd[0]);
     char *tar_argv[] = {"tar", "-xzf", "-", "-C", (char *)dest_dir, NULL};
     execvp("tar", tar_argv);
+    execv("/usr/bin/tar", tar_argv);
+    execv("/bin/tar", tar_argv);
     _exit(127);
   }
 
@@ -130,6 +132,8 @@ static void cleanup_dir(const char *dir_path) {
   if (pid == 0) {
     char *rm_argv[] = {"rm", "-rf", "--", (char *)dir_path, NULL};
     execvp("rm", rm_argv);
+    execv("/usr/bin/rm", rm_argv);
+    execv("/bin/rm", rm_argv);
     _exit(0);
   } else if (pid > 0) {
     int status = 0;
@@ -143,7 +147,7 @@ int main(int argc, char *argv[]) {
 
   for (int i = 1; i < argc; i++) {
     if (strcmp(argv[i], "--appimage-help") == 0) {
-      printf("Continuum Linux Native GTK 3 AppImage (v2.0.0 — Zero-FUSE)\n");
+      printf("Continuum Linux Native GTK 3 AppImage (v2.0.1 — Zero-FUSE)\n");
       printf("Uso:\n");
       printf("  %s                         Abre o aplicativo nativo GTK 3\n", argv[0]);
       printf("  %s --bridge-only           Executa apenas a ponte nativa em segundo plano\n", argv[0]);
@@ -152,7 +156,7 @@ int main(int argc, char *argv[]) {
       return 0;
     }
     if (strcmp(argv[i], "--appimage-version") == 0) {
-      printf("Continuum Linux Native AppImage 2.0.0\n");
+      printf("Continuum Linux Native AppImage 2.0.1\n");
       return 0;
     }
     if (strcmp(argv[i], "--appimage-extract") == 0) {
@@ -215,6 +219,7 @@ int main(int argc, char *argv[]) {
     int rc = extract_payload_to(self_fd, payload_offset, payload_size, "squashfs-root");
     close(self_fd);
     if (rc == 0) {
+      chmod("squashfs-root/AppRun", 0755);
       printf("squashfs-root\n");
       return 0;
     }
@@ -241,6 +246,7 @@ int main(int argc, char *argv[]) {
 
   char apprun_path[PATH_MAX];
   snprintf(apprun_path, sizeof(apprun_path), "%s/AppRun", mount_dir);
+  chmod(apprun_path, 0755);
 
   char **child_argv = calloc((size_t)argc + 1, sizeof(char *));
   if (!child_argv) {

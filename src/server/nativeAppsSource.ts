@@ -634,6 +634,10 @@ def run_gtk_app():
     gi.require_version("Gtk", "3.0")
     from gi.repository import Gdk, GLib, Gtk
 
+    ok_init, _ = Gtk.init_check(sys.argv)
+    if not ok_init:
+        raise RuntimeError("Display grafico X11/Wayland indisponivel para GTK 3.")
+
     css = b"""
     window, .background { background-color: #090B0E; color: #F1F5F9; }
     headerbar { background-color: #0D1015; color: #F1F5F9; border-bottom: 1px solid #222936; }
@@ -647,17 +651,34 @@ def run_gtk_app():
     .ok { color: #16A34A; font-weight: bold; }
     .warn { color: #D97706; font-weight: bold; }
     """
-    provider = Gtk.CssProvider()
-    provider.load_from_data(css)
-    Gtk.StyleContext.add_provider_for_screen(
-        Gdk.Screen.get_default(), provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
-    )
+    try:
+        screen = Gdk.Screen.get_default()
+        if screen is not None:
+            provider = Gtk.CssProvider()
+            provider.load_from_data(css)
+            Gtk.StyleContext.add_provider_for_screen(
+                screen, provider, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION
+            )
+    except Exception as css_exc:
+        log_msg(f"Aviso CSS GTK 3 ignorado: {css_exc}")
 
     class ContinuumWindow(Gtk.Window):
         def __init__(self):
             super().__init__(title="Continuum — Aplicativo Nativo Linux")
             self.set_default_size(980, 680)
             self.set_border_width(0)
+            self.set_position(Gtk.WindowPosition.CENTER)
+
+            for icon_cand in (
+                os.path.join(os.environ.get("APPDIR", ""), "continuum.png"),
+                "/usr/share/icons/hicolor/512x512/apps/continuum.png",
+            ):
+                if icon_cand and os.path.isfile(icon_cand):
+                    try:
+                        self.set_icon_from_file(icon_cand)
+                        break
+                    except Exception:
+                        pass
 
             self.cfg = load_config()
             self.devices = []
@@ -665,6 +686,7 @@ def run_gtk_app():
             self.notifications = []
             self.target_device_id = None
             self._drag_last = None
+            self._press_pos = None
 
             header = Gtk.HeaderBar()
             header.set_show_close_button(True)
@@ -1087,10 +1109,161 @@ def run_gtk_app():
 
     win = ContinuumWindow()
     win.show_all()
+    win.present()
     Gtk.main()
 
 
+def run_tk_app():
+    import tkinter as tk
+    from tkinter import filedialog, ttk
+
+    cfg = load_config()
+    root = tk.Tk()
+    root.title("Continuum — Aplicativo Nativo Linux")
+    root.geometry("940x640")
+    root.configure(bg="#090B0E")
+
+    ev_q = queue.Queue()
+    state = {"devices": [], "target_id": None, "drag_last": None}
+
+    top = tk.Frame(root, bg="#11151B", padx=12, pady=10)
+    top.pack(fill="x")
+    tk.Label(top, text="CONTINUUM", fg="#F1F5F9", bg="#11151B", font=("Sans", 12, "bold")).pack(side="left")
+    status_var = tk.StringVar(value=f"Conectando ({cfg['roomCode']})...")
+    tk.Label(top, textvariable=status_var, fg="#60A5FA", bg="#11151B", font=("Sans", 10)).pack(side="left", padx=14)
+
+    room_var = tk.StringVar(value=cfg["roomCode"])
+    srv_var = tk.StringVar(value=cfg["serverUrl"])
+    tk.Entry(top, textvariable=srv_var, width=36, bg="#090B0E", fg="#F1F5F9", insertbackground="#F1F5F9").pack(side="left", padx=4)
+    tk.Entry(top, textvariable=room_var, width=9, bg="#090B0E", fg="#F1F5F9", insertbackground="#F1F5F9").pack(side="left", padx=4)
+
+    client = MeshClientThread(cfg, lambda ev: ev_q.put(ev))
+
+    def reconnect():
+        cfg["serverUrl"] = srv_var.get().strip().rstrip("/")
+        cfg["roomCode"] = "".join(c for c in room_var.get().upper() if c.isalnum())[:8] or "MESH01"
+        save_config(cfg)
+        client.reconfigure(cfg)
+        status_var.set(f"Reconectando ({cfg['roomCode']})...")
+
+    tk.Button(top, text="Conectar", command=reconnect, bg="#3B82F6", fg="#FFFFFF", relief="flat", padx=10).pack(side="left", padx=4)
+
+    nb = ttk.Notebook(root)
+    nb.pack(fill="both", expand=True, padx=12, pady=10)
+
+    tab_dev = tk.Frame(nb, bg="#090B0E")
+    nb.add(tab_dev, text="Dispositivos")
+    dev_list = tk.Listbox(tab_dev, bg="#11151B", fg="#F1F5F9", selectbackground="#3B82F6", font=("Sans", 10))
+    dev_list.pack(fill="both", expand=True, padx=8, pady=8)
+
+    def on_select_dev(_ev):
+        sel = dev_list.curselection()
+        if sel:
+            idx = sel[0]
+            peers = [d for d in state["devices"] if d.get("id") != DEVICE_ID]
+            if 0 <= idx < len(peers):
+                state["target_id"] = peers[idx].get("id")
+
+    dev_list.bind("<<ListboxSelect>>", on_select_dev)
+
+    tab_rem = tk.Frame(nb, bg="#090B0E")
+    nb.add(tab_rem, text="Controle Remoto")
+    pad = tk.Canvas(tab_rem, bg="#11151B", height=280, highlightthickness=1, highlightbackground="#222936")
+    pad.pack(fill="both", expand=True, padx=8, pady=8)
+    pad.create_text(16, 20, anchor="nw", fill="#94A3B8", text="Trackpad Nativo — arraste para mover o cursor remoto · clique esquerdo/direito")
+
+    def send_inp(payload):
+        if state["target_id"]:
+            client.send({"type": "input:event", "toDeviceId": state["target_id"], "input": payload})
+
+    pad.bind("<ButtonPress-1>", lambda e: state.__setitem__("drag_last", (e.x, e.y)))
+    def on_drag(e):
+        last = state["drag_last"]
+        if last:
+            dx, dy = (e.x - last[0]) * 2, (e.y - last[1]) * 2
+            state["drag_last"] = (e.x, e.y)
+            if abs(dx) >= 1 or abs(dy) >= 1:
+                send_inp({"kind": "move", "nx": 0.5, "ny": 0.5, "dx": round(dx), "dy": round(dy)})
+    pad.bind("<B1-Motion>", on_drag)
+    pad.bind("<ButtonRelease-1>", lambda _e: send_inp({"kind": "click", "button": "left"}))
+    pad.bind("<Button-3>", lambda _e: send_inp({"kind": "click", "button": "right"}))
+
+    btn_row = tk.Frame(tab_rem, bg="#090B0E")
+    btn_row.pack(fill="x", padx=8, pady=4)
+    for lbl, act in [("Vol -", "vol_down"), ("Vol +", "vol_up"), ("Play/Pause", "media_play_pause"), ("Bloquear", "lock"), ("Localizar", "ping")]:
+        tk.Button(btn_row, text=lbl, command=lambda a=act: send_inp({"kind": "command", "action": a}), bg="#171C24", fg="#F1F5F9", relief="flat", padx=10, pady=5).pack(side="left", padx=4)
+
+    tab_cf = tk.Frame(nb, bg="#090B0E")
+    nb.add(tab_cf, text="Arquivos & Clipboard")
+    clip_box = tk.Text(tab_cf, height=10, bg="#11151B", fg="#F1F5F9", insertbackground="#F1F5F9")
+    clip_box.pack(fill="both", expand=True, padx=8, pady=8)
+
+    cf_bar = tk.Frame(tab_cf, bg="#090B0E")
+    cf_bar.pack(fill="x", padx=8, pady=6)
+    def push_clip():
+        txt = clip_box.get("1.0", "end").strip()
+        if txt:
+            client.send({"type": "clipboard:push", "item": {"id": f"clip-{int(time.time()*1000)}", "content": txt, "kind": "url" if txt.startswith("http") else "text", "sourceDeviceId": DEVICE_ID, "sourceDeviceName": cfg["deviceName"], "createdAt": int(time.time()*1000)}})
+    def pick_file():
+        p = filedialog.askopenfilename(title="Selecionar arquivo para enviar")
+        if p:
+            client.send_file(p, state["target_id"] or "all")
+    tk.Button(cf_bar, text="Sincronizar Clipboard", command=push_clip, bg="#3B82F6", fg="#FFFFFF", relief="flat", padx=12, pady=6).pack(side="left", padx=4)
+    tk.Button(cf_bar, text="Enviar Arquivo...", command=pick_file, bg="#171C24", fg="#F1F5F9", relief="flat", padx=12, pady=6).pack(side="left", padx=4)
+
+    def poll():
+        while True:
+            try:
+                msg = ev_q.get_nowait()
+            except queue.Empty:
+                break
+            t = msg.get("type")
+            if t == "local:status":
+                status_var.set(f"{msg.get('state')} · {cfg['roomCode']}")
+            elif t in ("mesh:init", "mesh:devices_sync", "device:joined", "device:updated", "device:left"):
+                if t == "mesh:init":
+                    state["devices"] = (msg.get("snapshot") or {}).get("devices") or []
+                elif t == "mesh:devices_sync":
+                    state["devices"] = msg.get("devices") or []
+                elif t in ("device:joined", "device:updated") and msg.get("device"):
+                    d = msg["device"]
+                    state["devices"] = [x for x in state["devices"] if x.get("id") != d.get("id")] + [d]
+                elif t == "device:left":
+                    state["devices"] = [x for x in state["devices"] if x.get("id") != msg.get("deviceId")]
+                dev_list.delete(0, "end")
+                peers = [d for d in state["devices"] if d.get("id") != DEVICE_ID]
+                for p in peers:
+                    dev_list.insert("end", f"{p.get('name', 'Dispositivo')} [{str(p.get('os', '')).upper()}]")
+                if not state["target_id"] and peers:
+                    state["target_id"] = peers[0].get("id")
+            elif t == "clipboard:added" and msg.get("item"):
+                clip_box.delete("1.0", "end")
+                clip_box.insert("1.0", str(msg["item"].get("content") or ""))
+        root.after(120, poll)
+
+    client.start()
+    root.after(120, poll)
+    root.protocol("WM_DELETE_WINDOW", lambda: (client.stop(), root.destroy()))
+    root.mainloop()
+
+
+def show_graphical_error(title, body):
+    try:
+        if shutil.which("zenity"):
+            subprocess.Popen(["zenity", "--error", "--width=460", f"--title={title}", f"--text={body}"])
+            return
+        if shutil.which("kdialog"):
+            subprocess.Popen(["kdialog", "--error", body, "--title", title])
+            return
+        if shutil.which("notify-send"):
+            subprocess.Popen(["notify-send", "-u", "critical", title, body])
+    except Exception:
+        pass
+
+
 def main():
+    import traceback
+
     if "--bridge-only" in sys.argv:
         cfg = load_config()
         client = MeshClientThread(cfg, lambda _ev: None)
@@ -1102,18 +1275,28 @@ def main():
             client.stop()
         return
 
+    log_msg(f"Iniciando Continuum Linux GUI (python={sys.executable}, DISPLAY={os.environ.get('DISPLAY')}, WAYLAND={os.environ.get('WAYLAND_DISPLAY')})")
     try:
         run_gtk_app()
-    except Exception as exc:
-        log_msg(f"GTK 3 indisponivel ({exc}); mantendo ponte nativa ativa em segundo plano.")
-        cfg = load_config()
-        client = MeshClientThread(cfg, lambda _ev: None)
-        client.start()
-        try:
-            while True:
-                time.sleep(1)
-        except KeyboardInterrupt:
-            client.stop()
+        return
+    except Exception as gtk_exc:
+        log_msg(f"Falha ao iniciar GTK 3: {gtk_exc}\\n{traceback.format_exc()}")
+
+    try:
+        log_msg("Tentando fallback grafico nativo Tkinter...")
+        run_tk_app()
+        return
+    except Exception as tk_exc:
+        log_msg(f"Falha tambem no fallback Tkinter: {tk_exc}\\n{traceback.format_exc()}")
+        msg = (
+            f"Nao foi possivel abrir a janela nativa do Continuum.\\n\\n"
+            f"Instale GTK 3 para Python no Linux:\\n"
+            f"sudo apt install python3-gi gir1.2-gtk-3.0\\n\\n"
+            f"Log completo salvo em:\\n{LOG_FILE}"
+        )
+        print(msg, file=sys.stderr)
+        show_graphical_error("Continuum — Erro ao Abrir Interface", msg)
+        sys.exit(1)
 
 
 if __name__ == "__main__":
