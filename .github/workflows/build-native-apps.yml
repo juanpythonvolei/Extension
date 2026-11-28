@@ -9,7 +9,7 @@ on:
       server_url:
         description: 'URL publica do servidor Continuum (ex: https://ais-pre-...run.app)'
         required: false
-        default: 'https://ais-pre-a6iomfzcjhr5udpk6kpqgs-702819737353.us-east1.run.app'
+        default: 'https://continuum.local'
       room_code:
         description: 'Codigo da malha inicial (ex: MESH01)'
         required: false
@@ -169,15 +169,19 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
-          name: Continuum Native Apps v2.0 (${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Build Recente' }})
+          name: Continuum Native Apps v3.0 (${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Build Recente' }})
           make_latest: true
           body: |
-            ## Aplicativos 100% Nativos Compilados — Continuum (Sem WebApp / Sem WebView)
+            ## Continuum v3.0 — Aplicativos Nativos com Comunicação Direta LAN (Sem App Web)
 
-            - **Linux AppImage Universal (Zorin OS, Ubuntu, Fedora, Arch — GTK 3):** `Continuum-Linux-x86_64.AppImage`
-            - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** `Continuum-Linux-amd64.deb`
-            - **Linux Portátil (GTK 3):** `Continuum-Linux-Portable.tar.gz`
-            - **Windows 10/11 (Instalador NSIS — C# .NET 8):** `Continuum-Windows-Setup.exe`
-            - **Windows 10/11 (Executável Único — C# .NET 8):** `Continuum-Windows.exe`
-            - **Android (Kotlin + OkHttp + Trackpad Nativo):** `Continuum-Android.apk`
+            - **Comunicação Direta P2P na Rede Local:** Linux, Windows e Android se descobrem automaticamente no Wi-Fi (UDP `45890`) e se conectam direto entre si via Hub WebSocket embutido (TCP `45891`), sem precisar do app web.
+            - **Nova Interface Nativa Interativa:** Mapa Espacial com arrastar e soltar sincronizado, Trackpad Tátil com grade de precisão e feedback visual, barra de progresso de arquivos e navegação lateral moderna.
+
+            ### Artefatos Compilados
+            - **Linux AppImage Universal Zero-FUSE (GTK 3 + Cairo):** `Continuum-Linux-x86_64.AppImage`
+            - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian):** `Continuum-Linux-amd64.deb`
+            - **Linux Portátil:** `Continuum-Linux-Portable.tar.gz`
+            - **Windows 10/11 (Instalador NSIS — C# .NET 8 + GDI+):** `Continuum-Windows-Setup.exe`
+            - **Windows 10/11 (Executável Único — C# .NET 8 + GDI+):** `Continuum-Windows.exe`
+            - **Android (Kotlin + Canvas Interativo + Descoberta LAN Wi-Fi):** `Continuum-Android.apk`
           files: release-assets/*

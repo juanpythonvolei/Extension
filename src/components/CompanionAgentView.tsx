@@ -819,13 +819,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
                   <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                    Continuum Linux AppImage (.AppImage · v2.0.0 — Plug-and-Play Universal)
+                    Continuum Linux AppImage (.AppImage · v3.0.0 — Direto LAN P2P)
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Executável único nativo <span className="font-mono text-[#CBD5E1]">ELF x86_64</span> com interface desktop <span className="font-mono text-[#CBD5E1]">GTK 3</span> (sem navegador e sem WebView). Roda direto no Zorin OS, Ubuntu, Mint, Pop!_OS, Fedora e Arch sem precisar de Loja de Apps nem <span className="font-mono text-[#CBD5E1]">libfuse2</span>: basta marcar <strong className="font-medium text-[#CBD5E1]">Permitir executar como programa</strong> nas Propriedades e abrir com dois cliques.
+                    Executável único nativo <span className="font-mono text-[#CBD5E1]">ELF x86_64</span> em <span className="font-mono text-[#CBD5E1]">GTK 3 + Cairo</span> com Mapa Espacial interativo, Trackpad Tátil e <strong className="font-medium text-[#CBD5E1]">Hub LAN embutido (45891 / UDP 45890)</strong> para comunicar-se diretamente com Windows e Android no Wi-Fi — sem depender do app web nem de <span className="font-mono text-[#CBD5E1]">libfuse2</span>.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    Binário ELF x86_64 · Zero FUSE · Sem instalação · GTK 3 nativo · Controle X11/PipeWire integrado
+                    Binário ELF x86_64 · Zero FUSE · Comunicação Direta LAN · Mapa Espacial Cairo · Controle X11/PipeWire
                   </p>
                 </div>
                 <button
@@ -852,9 +852,9 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
 
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#0D1015] p-4 sm:flex-row sm:items-center">
                 <div>
-                  <h2 className="text-xs font-semibold text-[#F1F5F9]">Instalador Debian/Ubuntu (.DEB · v2.0.0 — GTK 3 Nativo)</h2>
+                  <h2 className="text-xs font-semibold text-[#F1F5F9]">Instalador Debian/Ubuntu (.DEB · v3.0.0 — GTK 3 + Malha Direta LAN)</h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Pacote <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> autêntico com <span className="font-mono text-[#CBD5E1]">md5sums</span> para instalação no sistema (Zorin OS, Ubuntu, Mint, Pop!_OS e Debian), registrando atalho e ícone nativos no menu.
+                    Pacote <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> autêntico com <span className="font-mono text-[#CBD5E1]">md5sums</span> para Zorin OS, Ubuntu, Mint, Pop!_OS e Debian, com interface redesenhada e descoberta automática LAN.
                   </p>
                 </div>
                 <button
@@ -924,13 +924,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
                   <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                    Continuum Windows Nativo (.EXE · v2.0.0 — C# .NET 8, Sem Navegador)
+                    Continuum Windows Nativo (.EXE · v3.0.0 — Direto LAN P2P)
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Executável único nativo compilado em <span className="font-mono text-[#CBD5E1]">C# .NET 8 (WinForms + Win32 P/Invoke)</span> direto da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Zero navegador, zero WebView e zero instalação de runtime.
+                    Executável único nativo em <span className="font-mono text-[#CBD5E1]">C# .NET 8 (WinForms + GDI+ + Win32)</span> da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Inclui Mapa Espacial interativo, Trackpad Tátil e <strong className="font-medium text-[#CBD5E1]">Hub LAN embutido</strong> para conexão direta com Linux e Android sem usar o app web.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    Binário PE x64 autônomo{releaseWindowsExe ? ` · ${formatBytes(releaseWindowsExe.size)}` : ''} · Bandeja do Windows · Trackpad &amp; Win32 integrados
+                    Binário PE x64 autônomo{releaseWindowsExe ? ` · ${formatBytes(releaseWindowsExe.size)}` : ''} · Hub LAN 45891 · Descoberta UDP · Bandeja &amp; Win32
                   </p>
                 </div>
                 <a
@@ -980,13 +980,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                 <div className="flex flex-col justify-between gap-4">
                   <div>
                     <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                      Continuum Android Nativo (.APK · v2.0.0 — Kotlin, Sem WebView)
+                      Continuum Android Nativo (.APK · v3.0.0 — Direto Wi-Fi LAN)
                     </h2>
                     <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                      Aplicativo nativo compilado em <span className="font-mono text-[#CBD5E1]">Kotlin + OkHttp WebSocket + Trackpad Multi-Toque</span> direto da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Aponte a câmera do celular para o QR Code ou clique abaixo para baixar o <span className="font-mono text-[#CBD5E1]">Continuum-Android.apk</span>.
+                      Aplicativo nativo em <span className="font-mono text-[#CBD5E1]">Kotlin + Canvas Interativo + Descoberta UDP Wi-Fi</span> da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Descobre e conecta-se diretamente ao Linux e Windows no mesmo Wi-Fi — sem depender do app web.
                     </p>
                     <p className="mt-2 text-[11px] text-[#64748B]">
-                      APK nativo real{releaseAndroidApk ? ` · ${formatBytes(releaseAndroidApk.size)}` : ''} · Zero WebView · Trackpad Multi-Toque · ClipboardManager · Arquivos
+                      APK nativo real{releaseAndroidApk ? ` · ${formatBytes(releaseAndroidApk.size)}` : ''} · Descoberta Wi-Fi LAN · Mapa Espacial · Trackpad Multi-Toque
                     </p>
                   </div>
 

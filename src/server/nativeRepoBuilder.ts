@@ -69,7 +69,7 @@ INSTALLED_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: continuum-mesh
-Version: 2.0.0
+Version: 3.0.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -78,10 +78,10 @@ Depends: python3, python3-gi, gir1.2-gtk-3.0
 Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
 Homepage: ${serverUrl}
-Description: Continuum - Aplicativo Nativo Linux (GTK 3)
- Aplicativo desktop nativo em GTK 3 (sem navegador e sem WebView) para malha
- de dispositivos em tempo real, trackpad/teclado remoto, clipboard universal,
- transferencia de arquivos e controle nativo do sistema operacional.
+Description: Continuum 3.0 - Aplicativo Nativo Linux (GTK 3 + Malha Direta LAN)
+ Aplicativo desktop nativo em GTK 3 + Cairo com comunicacao direta entre apps
+ na rede local (Hub WebSocket 45891 + UDP 45890), mapa espacial interativo,
+ trackpad tatil, clipboard universal e transferencia direta de arquivos.
 EOF
 chmod 644 "$STAGE/DEBIAN/control"
 
@@ -174,7 +174,7 @@ Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
 StartupWMClass=continuum_app.py
-X-AppImage-Version=2.0.1
+X-AppImage-Version=3.0.0
 EOF
 chmod 644 "$APPDIR/continuum.desktop"
 cp "$APPDIR/continuum.desktop" "$APPDIR/usr/share/applications/continuum.desktop"
@@ -237,23 +237,21 @@ export function buildNativeRepoEntries(ctx: InstallerContext): ZipEntryInput[] {
   const room = safeStr(ctx.roomCode);
   const serverUrl = safeStr(ctx.appUrl).replace(/\/+$/, '');
 
-  const readmeMd = `# Continuum — Aplicativos 100% Nativos (Linux, Windows e Android)
+  const readmeMd = `# Continuum v3.0 — Aplicativos 100% Nativos com Comunicação Direta LAN (Linux, Windows e Android)
 
-Este repositório compila **aplicativos nativos reais** para cada sistema operacional — **sem WebView, sem Electron e sem abrir navegador** — utilizando **GitHub Actions** e publicando todos os instaladores automaticamente em **Releases**:
+Este repositório compila **aplicativos nativos reais** para cada sistema operacional — **sem WebView, sem Electron e sem depender do app web** — com comunicação direta **app-para-app na rede local (Hub WebSocket 45891 + descoberta automática UDP 45890)** e interface interativa redesenhada (Mapa Espacial com arrastar e soltar + Trackpad Tátil com feedback visual):
 
 | Plataforma | Tecnologia Nativa Real | Artefatos Compilados (Releases) |
 | --- | --- | --- |
-| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 nativo** + Python 3 stdlib + X11/PipeWire | \`Continuum-Linux-x86_64.AppImage\` + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
-| **Windows 10 / 11** | **C# .NET 8 WinForms + Win32 P/Invoke** | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
-| **Android (Celular e Tablet)** | **Kotlin nativo + Material + OkHttp WebSocket + Trackpad Multi-Toque** | \`Continuum-Android.apk\` |
+| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 + Cairo** + Hub LAN Embutido + X11/PipeWire | \`Continuum-Linux-x86_64.AppImage\` (Zero-FUSE) + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
+| **Windows 10 / 11** | **C# .NET 8 WinForms + GDI+ + Hub LAN Embutido + Win32** | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
+| **Android (Celular e Tablet)** | **Kotlin + Canvas Interativo + Descoberta Wi-Fi UDP + OkHttp** | \`Continuum-Android.apk\` |
 
-## Compilação Automática no GitHub
+## Comunicação Direta entre Apps (Sem App Web)
 
-Sempre que você sincronizar ou fizer \`push\` no branch \`main\`, o workflow \`.github/workflows/build-native-apps.yml\` compila os 3 sistemas operacionais em paralelo na nuvem e publica os executáveis finais em **Releases** com \`SHA256SUMS.txt\`.
+- Linux e Windows iniciam automaticamente um **Hub WebSocket local na porta TCP 45891** e anunciam sua presença via **UDP 45890**.
+- Os aplicativos Linux, Windows e Android conectados ao mesmo Wi-Fi/LAN se descobrem e se conectam **diretamente entre si**, com latência local de ~2 ms e sem precisar abrir o aplicativo web.
 
-> **Dica:** Para gerar uma nova build já apontando para outra URL de servidor ou outro código de malha, abra **Actions → Build Continuum Native Apps → Run workflow** e informe \`server_url\` e \`room_code\`. Todos os 3 apps também permitem alterar servidor e malha diretamente dentro da interface nativa sem precisar recompilar.
-
-- **Servidor padrão:** \`${serverUrl}\`
 - **Malha padrão:** \`${room}\`
 `;
 
@@ -428,17 +426,21 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: \${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
-          name: Continuum Native Apps v2.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Build Recente' }})
+          name: Continuum Native Apps v3.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Build Recente' }})
           make_latest: true
           body: |
-            ## Aplicativos 100% Nativos Compilados — Continuum (Sem WebApp / Sem WebView)
+            ## Continuum v3.0 — Aplicativos Nativos com Comunicação Direta LAN (Sem App Web)
 
-            - **Linux AppImage Universal (Zorin OS, Ubuntu, Fedora, Arch — GTK 3):** \`Continuum-Linux-x86_64.AppImage\`
-            - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian, Pop!_OS — GTK 3):** \`Continuum-Linux-amd64.deb\`
-            - **Linux Portátil (GTK 3):** \`Continuum-Linux-Portable.tar.gz\`
-            - **Windows 10/11 (Instalador NSIS — C# .NET 8):** \`Continuum-Windows-Setup.exe\`
-            - **Windows 10/11 (Executável Único — C# .NET 8):** \`Continuum-Windows.exe\`
-            - **Android (Kotlin + OkHttp + Trackpad Nativo):** \`Continuum-Android.apk\`
+            - **Comunicação Direta P2P na Rede Local:** Linux, Windows e Android se descobrem automaticamente no Wi-Fi (UDP \`45890\`) e se conectam direto entre si via Hub WebSocket embutido (TCP \`45891\`), sem precisar do app web.
+            - **Nova Interface Nativa Interativa:** Mapa Espacial com arrastar e soltar sincronizado, Trackpad Tátil com grade de precisão e feedback visual, barra de progresso de arquivos e navegação lateral moderna.
+
+            ### Artefatos Compilados
+            - **Linux AppImage Universal Zero-FUSE (GTK 3 + Cairo):** \`Continuum-Linux-x86_64.AppImage\`
+            - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian):** \`Continuum-Linux-amd64.deb\`
+            - **Linux Portátil:** \`Continuum-Linux-Portable.tar.gz\`
+            - **Windows 10/11 (Instalador NSIS — C# .NET 8 + GDI+):** \`Continuum-Windows-Setup.exe\`
+            - **Windows 10/11 (Executável Único — C# .NET 8 + GDI+):** \`Continuum-Windows.exe\`
+            - **Android (Kotlin + Canvas Interativo + Descoberta LAN Wi-Fi):** \`Continuum-Android.apk\`
           files: release-assets/*
 `;
 

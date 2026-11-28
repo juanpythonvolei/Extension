@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "ContinuumAndroid"
+rootProject.name = "ContinuumNative"
 include(":app")

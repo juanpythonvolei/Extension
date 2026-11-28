@@ -1,16 +1,17 @@
 !include "MUI2.nsh"
-Name "Continuum"
+Name "Continuum 3.0"
 OutFile "Continuum-Windows-Setup.exe"
 InstallDir "$LOCALAPPDATA\Continuum"
 RequestExecutionLevel user
 
-!insertmacro MUI_PAGE_WELCOME
+!define MUI_ABORTWARNING
+!define MUI_ICON "continuum.ico"
 !insertmacro MUI_PAGE_DIRECTORY
 !insertmacro MUI_PAGE_INSTFILES
 !insertmacro MUI_PAGE_FINISH
 !insertmacro MUI_LANGUAGE "PortugueseBR"
 
-Section "Continuum"
+Section "Instalar Continuum"
   SetOutPath "$INSTDIR"
   File "publish\Continuum.exe"
   File "continuum.ico"
@@ -19,13 +20,12 @@ Section "Continuum"
   CreateShortcut "$DESKTOP\Continuum.lnk" "$INSTDIR\Continuum.exe" "" "$INSTDIR\continuum.ico"
   WriteUninstaller "$INSTDIR\Uninstall.exe"
   CreateShortcut "$SMPROGRAMS\Continuum\Desinstalar Continuum.lnk" "$INSTDIR\Uninstall.exe"
+  Exec "$INSTDIR\Continuum.exe"
 SectionEnd
 
 Section "Uninstall"
   Delete "$DESKTOP\Continuum.lnk"
-  Delete "$SMPROGRAMS\Continuum\Continuum.lnk"
-  Delete "$SMPROGRAMS\Continuum\Desinstalar Continuum.lnk"
-  RMDir "$SMPROGRAMS\Continuum"
+  RMDir /r "$SMPROGRAMS\Continuum"
   Delete "$INSTDIR\Continuum.exe"
   Delete "$INSTDIR\continuum.ico"
   Delete "$INSTDIR\Uninstall.exe"

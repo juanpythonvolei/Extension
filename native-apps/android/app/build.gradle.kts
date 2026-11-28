@@ -3,32 +3,37 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-val continuumUrl = (project.findProperty("continuumUrl") as String?)?.trimEnd('/') ?: "https://ais-pre-a6iomfzcjhr5udpk6kpqgs-702819737353.us-east1.run.app"
-val roomCode = (project.findProperty("roomCode") as String?) ?: "MESH01"
+val defaultRoomCode: String = (project.findProperty("roomCode") as String?) ?: "MESH01"
 
 android {
-    namespace = "app.continuum.mesh"
+    namespace = "app.continuum.nativeclient"
     compileSdk = 34
 
     defaultConfig {
-        applicationId = "app.continuum.mesh"
-        minSdk = 24
+        applicationId = "app.continuum.nativeclient"
+        minSdk = 26
         targetSdk = 34
         versionCode = 3
-        versionName = "2.0.0"
+        versionName = "3.0.0"
 
-        buildConfigField("String", "DEFAULT_SERVER_URL", "\"${continuumUrl}\"")
-        buildConfigField("String", "DEFAULT_ROOM_CODE", "\"${roomCode}\"")
+        buildConfigField("String", "DEFAULT_ROOM_CODE", "\"$defaultRoomCode\"")
     }
 
     buildFeatures {
         buildConfig = true
     }
 
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+        }
+    }
+
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+
     kotlinOptions {
         jvmTarget = "17"
     }
