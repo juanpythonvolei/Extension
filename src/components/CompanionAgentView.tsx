@@ -819,13 +819,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
                   <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                    Continuum Linux AppImage (.AppImage · v3.0.0 — Direto LAN P2P)
+                    Continuum Linux AppImage (.AppImage · v4.0.0 — Holográfico + Radar LAN)
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Executável único nativo <span className="font-mono text-[#CBD5E1]">ELF x86_64</span> em <span className="font-mono text-[#CBD5E1]">GTK 3 + Cairo</span> com Mapa Espacial interativo, Trackpad Tátil e <strong className="font-medium text-[#CBD5E1]">Hub LAN embutido (45891 / UDP 45890)</strong> para comunicar-se diretamente com Windows e Android no Wi-Fi — sem depender do app web nem de <span className="font-mono text-[#CBD5E1]">libfuse2</span>.
+                    Executável único nativo <span className="font-mono text-[#CBD5E1]">ELF x86_64</span> em <span className="font-mono text-[#CBD5E1]">GTK 3 + Cairo 60 FPS</span> com interface holográfica, Mapa Espacial com radar varredor e medidores radiais CPU/RAM, Trackpad com rastro luminoso e <strong className="font-medium text-[#CBD5E1]">descoberta automática LAN em 3 camadas (UDP Unicast + Radar TCP /24 + Hub 45891)</strong>.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    Binário ELF x86_64 · Zero FUSE · Comunicação Direta LAN · Mapa Espacial Cairo · Controle X11/PipeWire
+                    Binário ELF x86_64 · Zero FUSE · UI Holográfica 60 FPS · Radar Automático Wi-Fi · Controle X11/PipeWire
                   </p>
                 </div>
                 <button
@@ -852,9 +852,9 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
 
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#222936] bg-[#0D1015] p-4 sm:flex-row sm:items-center">
                 <div>
-                  <h2 className="text-xs font-semibold text-[#F1F5F9]">Instalador Debian/Ubuntu (.DEB · v3.0.0 — GTK 3 + Malha Direta LAN)</h2>
+                  <h2 className="text-xs font-semibold text-[#F1F5F9]">Instalador Debian/Ubuntu (.DEB · v4.0.0 — Holográfico + Radar Auto LAN)</h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Pacote <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> autêntico com <span className="font-mono text-[#CBD5E1]">md5sums</span> para Zorin OS, Ubuntu, Mint, Pop!_OS e Debian, com interface redesenhada e descoberta automática LAN.
+                    Pacote <span className="font-mono text-[#CBD5E1]">dpkg-deb</span> autêntico com <span className="font-mono text-[#CBD5E1]">md5sums</span> para Zorin OS, Ubuntu, Mint, Pop!_OS e Debian, com UI holográfica 60 FPS e radar automático de rede local.
                   </p>
                 </div>
                 <button
@@ -924,13 +924,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
               <div className="flex flex-col justify-between gap-4 rounded-md border border-[#3B82F6]/40 bg-[#090B0E] p-5 sm:flex-row sm:items-center">
                 <div>
                   <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                    Continuum Windows Nativo (.EXE · v3.0.0 — Direto LAN P2P)
+                    Continuum Windows Nativo (.EXE · v4.0.0 — Holográfico + Radar LAN)
                   </h2>
                   <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                    Executável único nativo em <span className="font-mono text-[#CBD5E1]">C# .NET 8 (WinForms + GDI+ + Win32)</span> da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Inclui Mapa Espacial interativo, Trackpad Tátil e <strong className="font-medium text-[#CBD5E1]">Hub LAN embutido</strong> para conexão direta com Linux e Android sem usar o app web.
+                    Executável único nativo em <span className="font-mono text-[#CBD5E1]">C# .NET 8 (WinForms + GDI+ 60 FPS + Win32)</span> da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Inclui UI holográfica com radar espacial, medidores radiais e <strong className="font-medium text-[#CBD5E1]">Radar Automático LAN em 3 camadas</strong>.
                   </p>
                   <p className="mt-2 text-[11px] text-[#64748B]">
-                    Binário PE x64 autônomo{releaseWindowsExe ? ` · ${formatBytes(releaseWindowsExe.size)}` : ''} · Hub LAN 45891 · Descoberta UDP · Bandeja &amp; Win32
+                    Binário PE x64 autônomo{releaseWindowsExe ? ` · ${formatBytes(releaseWindowsExe.size)}` : ''} · UI Holográfica 60 FPS · Radar TCP/UDP · Hub 45891
                   </p>
                 </div>
                 <a
@@ -980,13 +980,13 @@ export const CompanionAgentView: React.FC<CompanionAgentViewProps> = ({
                 <div className="flex flex-col justify-between gap-4">
                   <div>
                     <h2 className="text-sm font-semibold text-[#F1F5F9]">
-                      Continuum Android Nativo (.APK · v3.0.0 — Direto Wi-Fi LAN)
+                      Continuum Android Nativo (.APK · v4.0.0 — Holográfico + Radar Automático)
                     </h2>
                     <p className="mt-1 text-xs leading-relaxed text-[#94A3B8]">
-                      Aplicativo nativo em <span className="font-mono text-[#CBD5E1]">Kotlin + Canvas Interativo + Descoberta UDP Wi-Fi</span> da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Descobre e conecta-se diretamente ao Linux e Windows no mesmo Wi-Fi — sem depender do app web.
+                      Aplicativo nativo em <span className="font-mono text-[#CBD5E1]">Kotlin + Canvas Holográfico + Radar Wi-Fi 3 Camadas</span> da Release <span className="font-mono text-[#CBD5E1]">{releaseState.tagName || 'latest-native'}</span> em <span className="font-mono text-[#CBD5E1]">{githubRepoDraft || DEFAULT_GITHUB_REPO}</span>. Escaneia a sub-rede Wi-Fi automaticamente em ~1,4s, hospeda Hub LAN próprio e aceita <span className="font-mono text-[#CBD5E1]">http://ip:porta</span> ou <span className="font-mono text-[#CBD5E1]">.42</span>.
                     </p>
                     <p className="mt-2 text-[11px] text-[#64748B]">
-                      APK nativo real{releaseAndroidApk ? ` · ${formatBytes(releaseAndroidApk.size)}` : ''} · Descoberta Wi-Fi LAN · Mapa Espacial · Trackpad Multi-Toque
+                      APK nativo real{releaseAndroidApk ? ` · ${formatBytes(releaseAndroidApk.size)}` : ''} · UI Holográfica 60 FPS · Radar TCP/UDP · Hub Android Embutido
                     </p>
                   </div>
 

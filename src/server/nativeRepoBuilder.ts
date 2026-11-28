@@ -69,7 +69,7 @@ INSTALLED_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: continuum-mesh
-Version: 3.0.0
+Version: 4.0.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -78,10 +78,10 @@ Depends: python3, python3-gi, gir1.2-gtk-3.0
 Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
 Homepage: ${serverUrl}
-Description: Continuum 3.0 - Aplicativo Nativo Linux (GTK 3 + Malha Direta LAN)
- Aplicativo desktop nativo em GTK 3 + Cairo com comunicacao direta entre apps
- na rede local (Hub WebSocket 45891 + UDP 45890), mapa espacial interativo,
- trackpad tatil, clipboard universal e transferencia direta de arquivos.
+Description: Continuum 4.0 - Aplicativo Nativo Linux Holografico (GTK 3 + Radar Auto LAN)
+ Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com interface holografica,
+ descoberta automatica LAN em 3 camadas (UDP Unicast + Radar TCP /24 + Hub 45891),
+ mapa espacial com medidores radiais CPU/RAM, trackpad tatil com rastro luminoso e arquivos.
 EOF
 chmod 644 "$STAGE/DEBIAN/control"
 
@@ -174,7 +174,7 @@ Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
 StartupWMClass=continuum_app.py
-X-AppImage-Version=3.0.0
+X-AppImage-Version=4.0.0
 EOF
 chmod 644 "$APPDIR/continuum.desktop"
 cp "$APPDIR/continuum.desktop" "$APPDIR/usr/share/applications/continuum.desktop"
@@ -237,20 +237,21 @@ export function buildNativeRepoEntries(ctx: InstallerContext): ZipEntryInput[] {
   const room = safeStr(ctx.roomCode);
   const serverUrl = safeStr(ctx.appUrl).replace(/\/+$/, '');
 
-  const readmeMd = `# Continuum v3.0 — Aplicativos 100% Nativos com Comunicação Direta LAN (Linux, Windows e Android)
+  const readmeMd = `# Continuum v4.0 — Interface Holográfica & Radar Automático LAN (Linux, Windows e Android)
 
-Este repositório compila **aplicativos nativos reais** para cada sistema operacional — **sem WebView, sem Electron e sem depender do app web** — com comunicação direta **app-para-app na rede local (Hub WebSocket 45891 + descoberta automática UDP 45890)** e interface interativa redesenhada (Mapa Espacial com arrastar e soltar + Trackpad Tátil com feedback visual):
+Este repositório compila **aplicativos 100% nativos** — **sem WebView, sem Electron e sem depender do app web** — com interface **holográfica 60 FPS** (radar espacial animado, feixes de dados luminosos, medidores radiais CPU/RAM e trackpad com rastro de luz) e **descoberta automática em 3 camadas no Wi-Fi**:
 
 | Plataforma | Tecnologia Nativa Real | Artefatos Compilados (Releases) |
 | --- | --- | --- |
-| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 + Cairo** + Hub LAN Embutido + X11/PipeWire | \`Continuum-Linux-x86_64.AppImage\` (Zero-FUSE) + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
-| **Windows 10 / 11** | **C# .NET 8 WinForms + GDI+ + Hub LAN Embutido + Win32** | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
-| **Android (Celular e Tablet)** | **Kotlin + Canvas Interativo + Descoberta Wi-Fi UDP + OkHttp** | \`Continuum-Android.apk\` |
+| **Linux (Zorin OS, Ubuntu, Mint, Debian, Fedora, Arch)** | **GTK 3 + Cairo 60 FPS** + Radar LAN 3 Camadas + Hub 45891 | \`Continuum-Linux-x86_64.AppImage\` (Zero-FUSE) + \`Continuum-Linux-amd64.deb\` + \`Continuum-Linux-Portable.tar.gz\` |
+| **Windows 10 / 11** | **C# .NET 8 WinForms + GDI+ 60 FPS** + Radar LAN + Win32 | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
+| **Android (Celular e Tablet)** | **Kotlin + Canvas Holográfico + Hub Embutido + Radar TCP/UDP** | \`Continuum-Android.apk\` |
 
-## Comunicação Direta entre Apps (Sem App Web)
+## Conexão Direta e Automática em 3 Camadas (Sem App Web)
 
-- Linux e Windows iniciam automaticamente um **Hub WebSocket local na porta TCP 45891** e anunciam sua presença via **UDP 45890**.
-- Os aplicativos Linux, Windows e Android conectados ao mesmo Wi-Fi/LAN se descobrem e se conectam **diretamente entre si**, com latência local de ~2 ms e sem precisar abrir o aplicativo web.
+1. **UDP Ativo Bidirecional (45890):** Broadcast global + sub-rede \`/24\` + Multicast \`239.255.45.90\` com resposta **Unicast imediata** (contorna filtros de broadcast do Android).
+2. **Radar TCP Paralelo (\`/24\` na porta 45891):** Escaneia automaticamente a rede Wi-Fi inteira em ~1,4s via \`/continuum-info\`, encontrando PCs mesmo quando o roteador bloqueia UDP.
+3. **Hub WebSocket Embutido nos 3 Sistemas (inclusive Android):** Se o firewall do PC bloquear entrada na porta \`45891\`, o PC descobre o Android e conecta de saída automaticamente. Além disso, o campo manual aceita \`http://ip:porta\`, \`ws://ip:porta\`, \`ip:porta\`, \`ip\` ou apenas \`.42\`.
 
 - **Malha padrão:** \`${room}\`
 `;
@@ -426,21 +427,22 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: \${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
-          name: Continuum Native Apps v3.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Build Recente' }})
+          name: Continuum Native Apps v4.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Holográfico + Radar LAN' }})
           make_latest: true
           body: |
-            ## Continuum v3.0 — Aplicativos Nativos com Comunicação Direta LAN (Sem App Web)
+            ## Continuum v4.0 — Interface Holográfica & Conexão LAN Automática em 3 Camadas
 
-            - **Comunicação Direta P2P na Rede Local:** Linux, Windows e Android se descobrem automaticamente no Wi-Fi (UDP \`45890\`) e se conectam direto entre si via Hub WebSocket embutido (TCP \`45891\`), sem precisar do app web.
-            - **Nova Interface Nativa Interativa:** Mapa Espacial com arrastar e soltar sincronizado, Trackpad Tátil com grade de precisão e feedback visual, barra de progresso de arquivos e navegação lateral moderna.
+            - **Descoberta Automática Ultra-Fluida:** UDP ativo com resposta Unicast + Radar TCP paralelo (\`/24\` em ~1,4s) + Hub WebSocket embutido em **Linux, Windows e Android** (contorna bloqueios de UDP do roteador e firewall local).
+            - **Conexão Manual Inteligente:** Aceita \`http://ip:porta\`, \`https://...\`, \`ws://...\`, \`ip:porta\`, \`ip\` ou atalho \`.42\` (completa sua sub-rede automaticamente).
+            - **Nova UI Holográfica 60 FPS:** Radar varredor animado, feixes de dados com pacotes de energia, cards translúcidos com medidores radiais de CPU/RAM e Trackpad Holográfico com rastro luminoso e ondas de toque.
 
             ### Artefatos Compilados
-            - **Linux AppImage Universal Zero-FUSE (GTK 3 + Cairo):** \`Continuum-Linux-x86_64.AppImage\`
+            - **Linux AppImage Universal Zero-FUSE (GTK 3 + Cairo 60 FPS):** \`Continuum-Linux-x86_64.AppImage\`
             - **Linux Instalador .DEB (Zorin OS, Ubuntu, Mint, Debian):** \`Continuum-Linux-amd64.deb\`
             - **Linux Portátil:** \`Continuum-Linux-Portable.tar.gz\`
-            - **Windows 10/11 (Instalador NSIS — C# .NET 8 + GDI+):** \`Continuum-Windows-Setup.exe\`
-            - **Windows 10/11 (Executável Único — C# .NET 8 + GDI+):** \`Continuum-Windows.exe\`
-            - **Android (Kotlin + Canvas Interativo + Descoberta LAN Wi-Fi):** \`Continuum-Android.apk\`
+            - **Windows 10/11 (Instalador NSIS — C# .NET 8 + GDI+ 60 FPS):** \`Continuum-Windows-Setup.exe\`
+            - **Windows 10/11 (Executável Único — C# .NET 8 + GDI+ 60 FPS):** \`Continuum-Windows.exe\`
+            - **Android (Kotlin + Canvas Holográfico + Hub LAN + Radar TCP/UDP):** \`Continuum-Android.apk\`
           files: release-assets/*
 `;
 

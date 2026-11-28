@@ -1,12 +1,12 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.ContinuumNative" parent="Theme.MaterialComponents.DayNight.NoActionBar">
-        <item name="colorPrimary">#3B82F6</item>
-        <item name="colorPrimaryVariant">#1D4ED8</item>
-        <item name="colorOnPrimary">#FFFFFF</item>
-        <item name="colorSecondary">#10B981</item>
-        <item name="android:windowBackground">#090B0E</item>
-        <item name="android:statusBarColor">#090B0E</item>
-        <item name="android:navigationBarColor">#0F1319</item>
+        <item name="colorPrimary">#22D3EE</item>
+        <item name="colorPrimaryVariant">#3B82F6</item>
+        <item name="colorOnPrimary">#050810</item>
+        <item name="colorSecondary">#8B5CF6</item>
+        <item name="android:windowBackground">#050810</item>
+        <item name="android:statusBarColor">#050810</item>
+        <item name="android:navigationBarColor">#080D18</item>
     </style>
 </resources>

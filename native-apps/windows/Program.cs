@@ -15,6 +15,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Text.RegularExpressions;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Windows.Forms;
@@ -54,6 +55,7 @@ public sealed class DiscoveredHub
     public string RoomCode { get; set; } = "MESH01";
     public long StartedAt { get; set; }
     public int Peers { get; set; }
+    public string Via { get; set; } = "UDP Auto";
     public DateTime LastSeenUtc { get; set; } = DateTime.UtcNow;
     public bool IsLocal { get; set; }
 }
@@ -62,14 +64,6 @@ public sealed class ClipEntry
 {
     public string Id { get; set; } = "";
     public string Content { get; set; } = "";
-    public string SourceDeviceName { get; set; } = "";
-}
-
-public sealed class NotifEntry
-{
-    public string Id { get; set; } = "";
-    public string Title { get; set; } = "";
-    public string Body { get; set; } = "";
     public string SourceDeviceName { get; set; } = "";
 }
 
@@ -126,8 +120,7 @@ internal static class Win32Native
         else if (kind == "scroll")
         {
             double dy = ev["dy"]?.GetValue<double>() ?? 0;
-            int wheel = dy > 0 ? -120 : 120;
-            mouse_event(0x0800, 0, 0, wheel, UIntPtr.Zero);
+            mouse_event(0x0800, 0, 0, dy > 0 ? -120 : 120, UIntPtr.Zero);
         }
         else if (kind == "text")
         {
@@ -192,7 +185,9 @@ internal static class NetworkUtil
 {
     public const int UdpPort = 45890;
     public const int DefaultWsPort = 45891;
-    public const string ProtoTag = "continuum-lan-v3";
+    public const string ProtoV4 = "continuum-lan-v4";
+    public const string ProtoV3 = "continuum-lan-v3";
+    public const string MulticastAddr = "239.255.45.90";
 
     public static string GetLocalLanIp()
     {
@@ -225,28 +220,78 @@ internal static class NetworkUtil
             }
         }
         catch { }
-
         return "127.0.0.1";
+    }
+
+    public static string? GetSubnetBroadcast(string ip)
+    {
+        var parts = (ip ?? "").Split('.');
+        if (parts.Length == 4 && !ip.StartsWith("127."))
+            return $"{parts[0]}.{parts[1]}.{parts[2]}.255";
+        return null;
     }
 
     public static string NormalizeWsEndpoint(string raw)
     {
         var s = (raw ?? "").Trim();
         if (string.IsNullOrEmpty(s)) return "";
-        if (s.StartsWith("ws://", StringComparison.OrdinalIgnoreCase) || s.StartsWith("wss://", StringComparison.OrdinalIgnoreCase))
+        s = Regex.Replace(s, @"^(https?|wss?)://", "", RegexOptions.IgnoreCase);
+        int slash = s.IndexOf('/');
+        if (slash >= 0) s = s[..slash];
+        s = s.Trim();
+        if (string.IsNullOrEmpty(s)) return "";
+
+        var dotTrimmed = s.TrimStart('.');
+        if (Regex.IsMatch(dotTrimmed, @"^[0-9]{1,3}(:[0-9]{2,5})?$"))
         {
-            var idx = s.IndexOf("://", StringComparison.Ordinal);
-            if (s.IndexOf('/', idx + 3) < 0) return s + "/ws";
-            return s;
+            var myIp = GetLocalLanIp();
+            var parts = myIp.Split('.');
+            if (parts.Length == 4 && !myIp.StartsWith("127."))
+                s = $"{parts[0]}.{parts[1]}.{parts[2]}.{dotTrimmed}";
         }
-        if (s.StartsWith("http://", StringComparison.OrdinalIgnoreCase)) return "ws://" + s[7..].TrimEnd('/') + "/ws";
-        if (s.StartsWith("https://", StringComparison.OrdinalIgnoreCase)) return "wss://" + s[8..].TrimEnd('/') + "/ws";
-        return s.Contains(':') ? $"ws://{s}/ws" : $"ws://{s}:{DefaultWsPort}/ws";
+
+        string host = s;
+        int port = DefaultWsPort;
+        int colon = s.LastIndexOf(':');
+        if (colon > 0 && int.TryParse(s[(colon + 1)..], out int parsedPort) && parsedPort >= 1 && parsedPort <= 65535)
+        {
+            host = s[..colon].Trim();
+            port = parsedPort;
+        }
+        if (string.IsNullOrEmpty(host) || host.Contains(' ')) return "";
+        return $"ws://{host}:{port}/ws";
+    }
+
+    public static async Task<JsonObject?> ProbeHttpInfoAsync(string host, int port, int timeoutMs)
+    {
+        try
+        {
+            using var tcp = new TcpClient();
+            using var cts = new CancellationTokenSource(timeoutMs);
+            await tcp.ConnectAsync(host, port, cts.Token);
+            using var stream = tcp.GetStream();
+            var req = Encoding.ASCII.GetBytes($"GET /continuum-info HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n");
+            await stream.WriteAsync(req, cts.Token);
+            using var ms = new MemoryStream();
+            var buf = new byte[1024];
+            while (ms.Length < 4096)
+            {
+                int n = await stream.ReadAsync(buf, cts.Token);
+                if (n <= 0) break;
+                ms.Write(buf, 0, n);
+            }
+            var text = Encoding.UTF8.GetString(ms.ToArray());
+            int idx = text.IndexOf("\r\n\r\n", StringComparison.Ordinal);
+            if (idx < 0) return null;
+            var obj = JsonNode.Parse(text[(idx + 4)..].Trim()) as JsonObject;
+            return obj != null && (obj["ok"]?.GetValue<bool>() ?? false) ? obj : null;
+        }
+        catch { return null; }
     }
 }
 
 // ---------------------------------------------------------------------------
-// Embedded RFC-6455 LAN WebSocket Mesh Hub (TCP 45891, zero admin privileges)
+// Embedded RFC-6455 LAN WebSocket Hub + HTTP /continuum-info Probe (TCP 45891)
 // ---------------------------------------------------------------------------
 internal sealed class EmbeddedLanHub : IDisposable
 {
@@ -281,15 +326,17 @@ internal sealed class EmbeddedLanHub : IDisposable
     public long StartedAt { get; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     public bool Active { get; private set; }
 
+    private readonly Func<string> _getRoom;
     private TcpListener? _listener;
     private readonly CancellationTokenSource _cts = new();
     private readonly object _sync = new();
     private readonly HashSet<ClientSession> _clients = new();
     private readonly Dictionary<string, RoomState> _rooms = new();
 
-    public EmbeddedLanHub(string hubId, int port = NetworkUtil.DefaultWsPort)
+    public EmbeddedLanHub(string hubId, Func<string> getRoom, int port = NetworkUtil.DefaultWsPort)
     {
         HubId = hubId;
+        _getRoom = getRoom;
         Port = port;
     }
 
@@ -304,28 +351,17 @@ internal sealed class EmbeddedLanHub : IDisposable
             _ = Task.Run(AcceptLoopAsync);
             return true;
         }
-        catch
-        {
-            Active = false;
-            return false;
-        }
+        catch { Active = false; return false; }
     }
 
     public int PeerCount(string roomCode)
     {
-        lock (_sync)
-        {
-            return _rooms.TryGetValue(roomCode, out var r) ? r.Devices.Count : 0;
-        }
+        lock (_sync) { return _rooms.TryGetValue(roomCode, out var r) ? r.Devices.Count : 0; }
     }
 
     private RoomState GetRoomLocked(string code)
     {
-        if (!_rooms.TryGetValue(code, out var r))
-        {
-            r = new RoomState();
-            _rooms[code] = r;
-        }
+        if (!_rooms.TryGetValue(code, out var r)) { r = new RoomState(); _rooms[code] = r; }
         return r;
     }
 
@@ -344,20 +380,13 @@ internal sealed class EmbeddedLanHub : IDisposable
         }
     }
 
-    private static byte[] EncodeServerFrame(string text, byte opcode = 0x1)
-    {
-        var payload = Encoding.UTF8.GetBytes(text);
-        return EncodeServerFrameBytes(payload, opcode);
-    }
+    private static byte[] EncodeServerFrame(string text, byte opcode = 0x1) => EncodeServerFrameBytes(Encoding.UTF8.GetBytes(text), opcode);
 
     private static byte[] EncodeServerFrameBytes(byte[] payload, byte opcode = 0x1)
     {
         using var ms = new MemoryStream();
         ms.WriteByte((byte)(0x80 | (opcode & 0x0F)));
-        if (payload.Length < 126)
-        {
-            ms.WriteByte((byte)payload.Length);
-        }
+        if (payload.Length < 126) ms.WriteByte((byte)payload.Length);
         else if (payload.Length < 65536)
         {
             ms.WriteByte(126);
@@ -412,19 +441,14 @@ internal sealed class EmbeddedLanHub : IDisposable
         byte[]? mask = masked ? await ReadExactAsync(stream, 4, ct) : null;
         byte[] payload = length > 0 ? (await ReadExactAsync(stream, (int)length, ct) ?? Array.Empty<byte>()) : Array.Empty<byte>();
         if (mask != null)
-        {
             for (int i = 0; i < payload.Length; i++) payload[i] ^= mask[i & 3];
-        }
         return (opcode, payload);
     }
 
     private async Task SendRawAsync(ClientSession session, byte[] frame)
     {
         await session.SendLock.WaitAsync();
-        try
-        {
-            await session.Stream.WriteAsync(frame, 0, frame.Length, _cts.Token);
-        }
+        try { await session.Stream.WriteAsync(frame, 0, frame.Length, _cts.Token); }
         catch { }
         finally { session.SendLock.Release(); }
     }
@@ -432,10 +456,7 @@ internal sealed class EmbeddedLanHub : IDisposable
     private async Task BroadcastRoomAsync(string roomCode, JsonObject payload, ClientSession? exclude = null)
     {
         List<ClientSession> targets;
-        lock (_sync)
-        {
-            targets = _clients.Where(c => c.RoomCode == roomCode && c != exclude).ToList();
-        }
+        lock (_sync) { targets = _clients.Where(c => c.RoomCode == roomCode && c != exclude).ToList(); }
         var frame = EncodeServerFrame(payload.ToJsonString());
         foreach (var t in targets) await SendRawAsync(t, frame);
     }
@@ -443,15 +464,8 @@ internal sealed class EmbeddedLanHub : IDisposable
     private async Task SendToDeviceAsync(string roomCode, string targetId, JsonObject payload, ClientSession? exclude = null)
     {
         List<ClientSession> targets;
-        lock (_sync)
-        {
-            targets = _clients.Where(c => c.RoomCode == roomCode && c.DeviceId == targetId && c != exclude).ToList();
-        }
-        if (targets.Count == 0)
-        {
-            await BroadcastRoomAsync(roomCode, payload, exclude);
-            return;
-        }
+        lock (_sync) { targets = _clients.Where(c => c.RoomCode == roomCode && c.DeviceId == targetId && c != exclude).ToList(); }
+        if (targets.Count == 0) { await BroadcastRoomAsync(roomCode, payload, exclude); return; }
         var frame = EncodeServerFrame(payload.ToJsonString());
         foreach (var t in targets) await SendRawAsync(t, frame);
     }
@@ -468,8 +482,7 @@ internal sealed class EmbeddedLanHub : IDisposable
                 int n = await session.Stream.ReadAsync(buf, 0, buf.Length, _cts.Token);
                 if (n <= 0) return;
                 reqBytes.Write(buf, 0, n);
-                var str = Encoding.UTF8.GetString(reqBytes.ToArray());
-                if (str.Contains("\r\n\r\n")) break;
+                if (Encoding.UTF8.GetString(reqBytes.ToArray()).Contains("\r\n\r\n")) break;
             }
 
             var headerText = Encoding.UTF8.GetString(reqBytes.ToArray());
@@ -486,8 +499,24 @@ internal sealed class EmbeddedLanHub : IDisposable
 
             if (string.IsNullOrEmpty(wsKey))
             {
-                var body = Encoding.UTF8.GetBytes($"{{\"ok\":true,\"proto\":\"{NetworkUtil.ProtoTag}\",\"hub\":\"{Environment.MachineName}\"}}");
-                var resp = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
+                var room = _getRoom();
+                var infoObj = new JsonObject
+                {
+                    ["ok"] = true,
+                    ["proto"] = NetworkUtil.ProtoV4,
+                    ["hubId"] = HubId,
+                    ["hubName"] = Environment.MachineName,
+                    ["hub"] = Environment.MachineName,
+                    ["os"] = "windows",
+                    ["roomCode"] = room,
+                    ["wsPort"] = Port,
+                    ["ip"] = NetworkUtil.GetLocalLanIp(),
+                    ["startedAt"] = StartedAt,
+                    ["peers"] = PeerCount(room),
+                    ["version"] = "4.0.0",
+                };
+                var body = Encoding.UTF8.GetBytes(infoObj.ToJsonString());
+                var resp = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nAccess-Control-Allow-Origin: *\r\nContent-Length: {body.Length}\r\nConnection: close\r\n\r\n");
                 await session.Stream.WriteAsync(resp);
                 await session.Stream.WriteAsync(body);
                 return;
@@ -509,13 +538,8 @@ internal sealed class EmbeddedLanHub : IDisposable
                 if (frame == null) break;
                 var (opcode, payload) = frame.Value;
                 if (opcode == 0x8) break;
-                if (opcode == 0x9)
-                {
-                    await SendRawAsync(session, EncodeServerFrameBytes(payload, 0xA));
-                    continue;
-                }
+                if (opcode == 0x9) { await SendRawAsync(session, EncodeServerFrameBytes(payload, 0xA)); continue; }
                 if (opcode != 0x1) continue;
-
                 JsonObject? msg = null;
                 try { msg = JsonNode.Parse(Encoding.UTF8.GetString(payload)) as JsonObject; } catch { }
                 if (msg != null) await ProcessMessageAsync(session, msg);
@@ -567,7 +591,7 @@ internal sealed class EmbeddedLanHub : IDisposable
                 var rm = GetRoomLocked(roomCode);
                 int idx = rm.Devices.Count;
                 double defX = 180 + (idx % 3) * 230;
-                double defY = 130 + (idx / 3) * 165;
+                double defY = 140 + (idx / 3) * 165;
                 if (rm.Devices.TryGetValue(devId, out var prev))
                 {
                     defX = prev["x"]?.GetValue<double>() ?? defX;
@@ -616,13 +640,7 @@ internal sealed class EmbeddedLanHub : IDisposable
 
         if (type == "telemetry:ping")
         {
-            var pong = new JsonObject
-            {
-                ["type"] = "telemetry:pong",
-                ["sentAt"] = msg["sentAt"]?.DeepClone(),
-                ["serverTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds(),
-            };
-            await SendRawAsync(session, EncodeServerFrame(pong.ToJsonString()));
+            await SendRawAsync(session, EncodeServerFrame(new JsonObject { ["type"] = "telemetry:pong", ["sentAt"] = msg["sentAt"]?.DeepClone(), ["serverTime"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() }.ToJsonString()));
         }
         else if (type == "device:telemetry" && !string.IsNullOrEmpty(senderId))
         {
@@ -630,14 +648,9 @@ internal sealed class EmbeddedLanHub : IDisposable
             lock (_sync)
             {
                 var rm = GetRoomLocked(room);
-                if (rm.Devices.TryGetValue(senderId, out var d))
-                {
-                    d["telemetry"] = msg["telemetry"]?.DeepClone() ?? new JsonObject();
-                    updated = (JsonObject)d.DeepClone();
-                }
+                if (rm.Devices.TryGetValue(senderId, out var d)) { d["telemetry"] = msg["telemetry"]?.DeepClone() ?? new JsonObject(); updated = (JsonObject)d.DeepClone(); }
             }
-            if (updated != null)
-                await BroadcastRoomAsync(room, new JsonObject { ["type"] = "device:updated", ["device"] = updated });
+            if (updated != null) await BroadcastRoomAsync(room, new JsonObject { ["type"] = "device:updated", ["device"] = updated });
         }
         else if (type == "device:move")
         {
@@ -648,23 +661,15 @@ internal sealed class EmbeddedLanHub : IDisposable
             lock (_sync)
             {
                 var rm = GetRoomLocked(room);
-                if (rm.Devices.TryGetValue(targetId, out var d))
-                {
-                    d["x"] = nx;
-                    d["y"] = ny;
-                    updated = (JsonObject)d.DeepClone();
-                }
+                if (rm.Devices.TryGetValue(targetId, out var d)) { d["x"] = nx; d["y"] = ny; updated = (JsonObject)d.DeepClone(); }
             }
-            if (updated != null)
-                await BroadcastRoomAsync(room, new JsonObject { ["type"] = "device:updated", ["device"] = updated });
+            if (updated != null) await BroadcastRoomAsync(room, new JsonObject { ["type"] = "device:updated", ["device"] = updated });
         }
         else if (type == "input:event" || type == "file:start" || type == "file:chunk" || type == "file:complete")
         {
             var targetId = msg["targetDeviceId"]?.GetValue<string>();
-            if (!string.IsNullOrEmpty(targetId))
-                await SendToDeviceAsync(room, targetId, (JsonObject)msg.DeepClone(), exclude: session);
-            else
-                await BroadcastRoomAsync(room, (JsonObject)msg.DeepClone(), exclude: session);
+            if (!string.IsNullOrEmpty(targetId)) await SendToDeviceAsync(room, targetId, (JsonObject)msg.DeepClone(), exclude: session);
+            else await BroadcastRoomAsync(room, (JsonObject)msg.DeepClone(), exclude: session);
         }
         else if (type == "clipboard:push")
         {
@@ -712,45 +717,43 @@ internal sealed class EmbeddedLanHub : IDisposable
         Active = false;
         _cts.Cancel();
         try { _listener?.Stop(); } catch { }
-        lock (_sync)
-        {
-            foreach (var c in _clients) { try { c.Tcp.Close(); } catch { } }
-            _clients.Clear();
-        }
+        lock (_sync) { foreach (var c in _clients) { try { c.Tcp.Close(); } catch { } } _clients.Clear(); }
     }
 }
 
 // ---------------------------------------------------------------------------
-// UDP Auto-Discovery Beacon & Leader Election (UDP 45890)
+// 3-Layer Hybrid LAN Discovery (UDP Broadcast + Subnet + Multicast + Unicast Reply + Parallel /24 TCP Scan)
 // ---------------------------------------------------------------------------
 internal sealed class UdpDiscoveryService : IDisposable
 {
     private readonly EmbeddedLanHub _hub;
     private readonly Func<string> _getRoom;
     private readonly Action _onChanged;
+    private readonly Action<bool, int> _onScanState;
     private readonly CancellationTokenSource _cts = new();
     private readonly ConcurrentDictionary<string, DiscoveredHub> _peers = new();
+    private volatile bool _scanning;
 
-    public UdpDiscoveryService(EmbeddedLanHub hub, Func<string> getRoom, Action onChanged)
+    public UdpDiscoveryService(EmbeddedLanHub hub, Func<string> getRoom, Action onChanged, Action<bool, int> onScanState)
     {
         _hub = hub;
         _getRoom = getRoom;
         _onChanged = onChanged;
+        _onScanState = onScanState;
     }
 
     public void Start()
     {
         _ = Task.Run(BroadcastLoopAsync);
         _ = Task.Run(ListenLoopAsync);
+        _ = Task.Run(ScanSubnetTcpAsync);
     }
 
     public List<DiscoveredHub> ListPeers()
     {
-        var cutoff = DateTime.UtcNow.AddSeconds(-9);
+        var cutoff = DateTime.UtcNow.AddSeconds(-25);
         foreach (var kv in _peers.ToArray())
-        {
             if (kv.Value.LastSeenUtc < cutoff) _peers.TryRemove(kv.Key, out _);
-        }
         return _peers.Values.OrderBy(p => p.HubName).ToList();
     }
 
@@ -771,35 +774,110 @@ internal sealed class UdpDiscoveryService : IDisposable
                 IsLocal = true,
             });
         }
-        return list.OrderBy(c => c.StartedAt).ThenBy(c => c.HubId, StringComparer.Ordinal).FirstOrDefault();
+        return list.OrderBy(c => c.Os == "android" ? 1 : 0).ThenBy(c => c.StartedAt).ThenBy(c => c.HubId, StringComparer.Ordinal).FirstOrDefault();
+    }
+
+    public async Task ScanSubnetTcpAsync()
+    {
+        if (_scanning) return;
+        var myIp = NetworkUtil.GetLocalLanIp();
+        var parts = myIp.Split('.');
+        if (parts.Length != 4 || myIp.StartsWith("127.")) return;
+        var prefix = $"{parts[0]}.{parts[1]}.{parts[2]}";
+
+        _scanning = true;
+        _onScanState(true, 0);
+        try
+        {
+            using var sem = new SemaphoreSlim(32);
+            int done = 0;
+            var tasks = new List<Task>();
+            for (int i = 1; i <= 254; i++)
+            {
+                var ip = $"{prefix}.{i}";
+                if (ip == myIp) { Interlocked.Increment(ref done); continue; }
+                tasks.Add(Task.Run(async () =>
+                {
+                    await sem.WaitAsync(_cts.Token);
+                    try
+                    {
+                        var info = await NetworkUtil.ProbeHttpInfoAsync(ip, NetworkUtil.DefaultWsPort, 260);
+                        if (info != null)
+                        {
+                            var hubId = info["hubId"]?.GetValue<string>() ?? $"lan-{ip}";
+                            if (hubId != _hub.HubId)
+                            {
+                                _peers[hubId] = new DiscoveredHub
+                                {
+                                    HubId = hubId,
+                                    HubName = info["hubName"]?.GetValue<string>() ?? info["hub"]?.GetValue<string>() ?? ip,
+                                    Os = info["os"]?.GetValue<string>() ?? "desktop",
+                                    Ip = ip,
+                                    WsPort = info["wsPort"]?.GetValue<int>() ?? NetworkUtil.DefaultWsPort,
+                                    RoomCode = info["roomCode"]?.GetValue<string>() ?? _getRoom(),
+                                    StartedAt = info["startedAt"]?.GetValue<long>() ?? 0,
+                                    Peers = info["peers"]?.GetValue<int>() ?? 1,
+                                    Via = "TCP Radar",
+                                    LastSeenUtc = DateTime.UtcNow,
+                                };
+                                _onChanged();
+                            }
+                        }
+                    }
+                    catch { }
+                    finally
+                    {
+                        sem.Release();
+                        int c = Interlocked.Increment(ref done);
+                        if (c % 20 == 0 || c == 254) _onScanState(true, (c * 100) / 254);
+                    }
+                }));
+            }
+            await Task.WhenAll(tasks);
+        }
+        catch { }
+        finally
+        {
+            _scanning = false;
+            _onScanState(false, 100);
+        }
+    }
+
+    private byte[] BuildBeacon(string btype)
+    {
+        var room = _getRoom();
+        return Encoding.UTF8.GetBytes(new JsonObject
+        {
+            ["proto"] = NetworkUtil.ProtoV4,
+            ["type"] = btype,
+            ["roomCode"] = room,
+            ["hubId"] = _hub.HubId,
+            ["hubName"] = Environment.MachineName,
+            ["os"] = "windows",
+            ["ip"] = NetworkUtil.GetLocalLanIp(),
+            ["wsPort"] = _hub.Port,
+            ["startedAt"] = _hub.StartedAt,
+            ["peers"] = _hub.PeerCount(room),
+        }.ToJsonString());
     }
 
     private async Task BroadcastLoopAsync()
     {
         using var udp = new UdpClient();
         udp.EnableBroadcast = true;
-        var ep = new IPEndPoint(IPAddress.Broadcast, NetworkUtil.UdpPort);
+        var globalEp = new IPEndPoint(IPAddress.Broadcast, NetworkUtil.UdpPort);
+        var mcastEp = new IPEndPoint(IPAddress.Parse(NetworkUtil.MulticastAddr), NetworkUtil.UdpPort);
         while (!_cts.IsCancellationRequested)
         {
             try
             {
                 if (_hub.Active)
                 {
-                    var room = _getRoom();
-                    var payload = new JsonObject
-                    {
-                        ["proto"] = NetworkUtil.ProtoTag,
-                        ["roomCode"] = room,
-                        ["hubId"] = _hub.HubId,
-                        ["hubName"] = Environment.MachineName,
-                        ["os"] = "windows",
-                        ["ip"] = NetworkUtil.GetLocalLanIp(),
-                        ["wsPort"] = _hub.Port,
-                        ["startedAt"] = _hub.StartedAt,
-                        ["peers"] = _hub.PeerCount(room),
-                    };
-                    var bytes = Encoding.UTF8.GetBytes(payload.ToJsonString());
-                    await udp.SendAsync(bytes, bytes.Length, ep);
+                    var bytes = BuildBeacon("beacon");
+                    await udp.SendAsync(bytes, bytes.Length, globalEp);
+                    var sb = NetworkUtil.GetSubnetBroadcast(NetworkUtil.GetLocalLanIp());
+                    if (sb != null) await udp.SendAsync(bytes, bytes.Length, new IPEndPoint(IPAddress.Parse(sb), NetworkUtil.UdpPort));
+                    await udp.SendAsync(bytes, bytes.Length, mcastEp);
                 }
             }
             catch { }
@@ -815,6 +893,7 @@ internal sealed class UdpDiscoveryService : IDisposable
             udp = new UdpClient();
             udp.Client.SetSocketOption(SocketOptionLevel.Socket, SocketOptionName.ReuseAddress, true);
             udp.Client.Bind(new IPEndPoint(IPAddress.Any, NetworkUtil.UdpPort));
+            try { udp.JoinMulticastGroup(IPAddress.Parse(NetworkUtil.MulticastAddr)); } catch { }
         }
         catch { return; }
 
@@ -827,9 +906,16 @@ internal sealed class UdpDiscoveryService : IDisposable
                     var res = await udp.ReceiveAsync(_cts.Token);
                     var node = JsonNode.Parse(Encoding.UTF8.GetString(res.Buffer)) as JsonObject;
                     if (node == null) continue;
-                    if (node["proto"]?.GetValue<string>() != NetworkUtil.ProtoTag) continue;
+                    var proto = node["proto"]?.GetValue<string>();
+                    if (proto != NetworkUtil.ProtoV4 && proto != NetworkUtil.ProtoV3) continue;
                     var hubId = node["hubId"]?.GetValue<string>() ?? "";
                     if (string.IsNullOrEmpty(hubId) || hubId == _hub.HubId) continue;
+
+                    if (node["type"]?.GetValue<string>() == "probe" && _hub.Active)
+                    {
+                        var reply = BuildBeacon("beacon");
+                        try { await udp.SendAsync(reply, reply.Length, res.RemoteEndPoint); } catch { }
+                    }
 
                     var senderIp = res.RemoteEndPoint.Address.ToString();
                     var ip = !senderIp.StartsWith("127.") ? senderIp : (node["ip"]?.GetValue<string>() ?? senderIp);
@@ -843,6 +929,7 @@ internal sealed class UdpDiscoveryService : IDisposable
                         RoomCode = node["roomCode"]?.GetValue<string>() ?? "MESH01",
                         StartedAt = node["startedAt"]?.GetValue<long>() ?? 0,
                         Peers = node["peers"]?.GetValue<int>() ?? 1,
+                        Via = "UDP Auto",
                         LastSeenUtc = DateTime.UtcNow,
                     };
                     _onChanged();
@@ -857,25 +944,28 @@ internal sealed class UdpDiscoveryService : IDisposable
 }
 
 // ---------------------------------------------------------------------------
-// Custom DoubleBuffered Interactive Spatial Device Map (GDI+)
+// Holographic 60 FPS Spatial Map Panel (DoubleBuffered GDI+ with Radar + Data Packets + Radial Gauges)
 // ---------------------------------------------------------------------------
-internal sealed class SpatialMapPanel : Panel
+internal sealed class HolographicSpatialMapPanel : Panel
 {
     public List<PeerDevice> Devices { get; set; } = new();
     public string SelfId { get; set; } = "";
     public string? SelectedId { get; set; }
+    public bool Scanning { get; set; }
+    public int ScanPct { get; set; }
+    public float Phase { get; set; }
     public event Action<PeerDevice>? DeviceSelected;
     public event Action<string, double, double>? DeviceMoved;
 
-    private const float NodeW = 198f;
-    private const float NodeH = 104f;
+    private const float NodeW = 212f;
+    private const float NodeH = 114f;
     private string? _dragId;
     private PointF _dragOffset;
 
-    public SpatialMapPanel()
+    public HolographicSpatialMapPanel()
     {
         DoubleBuffered = true;
-        BackColor = Color.FromArgb(10, 12, 16);
+        BackColor = Color.FromArgb(5, 8, 16);
     }
 
     private static GraphicsPath RoundedRect(RectangleF r, float radius)
@@ -890,52 +980,106 @@ internal sealed class SpatialMapPanel : Panel
         return path;
     }
 
+    private static PointF CubicPoint(float t, float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3)
+    {
+        float u = 1f - t;
+        float x = u * u * u * x0 + 3 * u * u * t * x1 + 3 * u * t * t * x2 + t * t * t * x3;
+        float y = u * u * u * y0 + 3 * u * u * t * y1 + 3 * u * t * t * y2 + t * t * t * y3;
+        return new PointF(x, y);
+    }
+
     private RectangleF GetNodeRect(PeerDevice d) => new((float)d.X - NodeW / 2f, (float)d.Y - NodeH / 2f, NodeW, NodeH);
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
+        if (Width <= 4 || Height <= 4) return;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
         g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
 
-        // Subtle Obsidian dot grid
-        using (var dotBrush = new SolidBrush(Color.FromArgb(48, 82, 102, 138)))
+        float cx = Width / 2f, cy = Height / 2f;
+        float maxR = Math.Min(Width, Height) * 0.44f;
+
+        // 1. Deep Space Gradient Backdrop
+        using (var bgBrush = new LinearGradientBrush(ClientRectangle, Color.FromArgb(11, 20, 38), Color.FromArgb(5, 8, 16), 90f))
+            g.FillRectangle(bgBrush, ClientRectangle);
+
+        // 2. Holographic Crosshair Matrix
+        using (var crossPen = new Pen(Color.FromArgb(52, 34, 211, 238), 1f))
         {
-            for (int gx = 20; gx < Width; gx += 28)
-                for (int gy = 20; gy < Height; gy += 28)
-                    g.FillEllipse(dotBrush, gx - 1, gy - 1, 2.2f, 2.2f);
+            for (int gx = 32; gx < Width; gx += 36)
+                for (int gy = 32; gy < Height; gy += 36)
+                {
+                    g.DrawLine(crossPen, gx - 2.5f, gy, gx + 2.5f, gy);
+                    g.DrawLine(crossPen, gx, gy - 2.5f, gx, gy + 2.5f);
+                }
+        }
+
+        // 3. Concentric Radar Rings & Sweeping Beam
+        for (int i = 1; i <= 3; i++)
+        {
+            float r = maxR * (i / 3f);
+            using var rp = new Pen(Color.FromArgb(Scanning ? 52 : 24, 34, 211, 238), 1.1f);
+            g.DrawEllipse(rp, cx - r, cy - r, r * 2f, r * 2f);
+        }
+        float pulseT = (Phase * 0.45f) % 1f;
+        float pulseR = pulseT * maxR;
+        using (var pulsePen = new Pen(Color.FromArgb(Math.Clamp((int)((1f - pulseT) * (Scanning ? 130 : 60)), 0, 255), 34, 211, 238), 1.6f))
+            g.DrawEllipse(pulsePen, cx - pulseR, cy - pulseR, pulseR * 2f, pulseR * 2f);
+
+        if (Scanning || Devices.Count <= 1)
+        {
+            float deg = (Phase * 115f) % 360f;
+            using var pieBrush = new SolidBrush(Color.FromArgb(32, 34, 211, 238));
+            if (maxR > 10f)
+                g.FillPie(pieBrush, cx - maxR, cy - maxR, maxR * 2f, maxR * 2f, deg - 36f, 36f);
+            double rad = deg * Math.PI / 180.0;
+            using var beamPen = new Pen(Color.FromArgb(170, 34, 211, 238), 1.7f);
+            g.DrawLine(beamPen, cx, cy, cx + (float)(Math.Cos(rad) * maxR), cy + (float)(Math.Sin(rad) * maxR));
         }
 
         if (Devices.Count == 0)
         {
-            using var f = new Font("Segoe UI", 10.5f);
-            using var br = new SolidBrush(Color.FromArgb(148, 163, 184));
-            var txt = "Aguardando dispositivos na rede local (UDP 45890 / TCP 45891)...";
+            using var f = new Font("Segoe UI Semibold", 10f);
+            using var br = new SolidBrush(Color.FromArgb(34, 211, 238));
+            var txt = Scanning ? $"Radar Holográfico escaneando Wi-Fi... {ScanPct}%" : "Aguardando dispositivos Linux / Android na rede local...";
             var sz = g.MeasureString(txt, f);
-            g.DrawString(txt, f, br, (Width - sz.Width) / 2f, (Height - sz.Height) / 2f);
+            g.DrawString(txt, f, br, (Width - sz.Width) / 2f, cy + maxR * 0.55f);
             return;
         }
 
-        // Mesh Bezier links
+        // 4. Glowing Bezier Mesh Links + Animated Data Packets
         var anchor = Devices.FirstOrDefault(d => d.Id == SelfId) ?? Devices[0];
         foreach (var d in Devices)
         {
             if (d.Id == anchor.Id) continue;
             bool sel = d.Id == SelectedId;
-            using var pen = new Pen(sel ? Color.FromArgb(190, 59, 130, 246) : Color.FromArgb(115, 72, 92, 125), sel ? 2.2f : 1.4f);
-            float mx = (float)(anchor.X + d.X) / 2f;
-            g.DrawBezier(pen, (float)anchor.X, (float)anchor.Y, mx, (float)anchor.Y, mx, (float)d.Y, (float)d.X, (float)d.Y);
+            float ax = (float)anchor.X, ay = (float)anchor.Y, dx = (float)d.X, dy = (float)d.Y;
+            float mx = (ax + dx) / 2f;
+
+            using var glowPen = new Pen(Color.FromArgb(sel ? 80 : 38, 34, 211, 238), sel ? 6.5f : 3.8f);
+            g.DrawBezier(glowPen, ax, ay, mx, ay, mx, dy, dx, dy);
+            using var corePen = new Pen(sel ? Color.FromArgb(230, 34, 211, 238) : Color.FromArgb(150, 59, 130, 246), sel ? 2.1f : 1.4f);
+            g.DrawBezier(corePen, ax, ay, mx, ay, mx, dy, dx, dy);
+
+            for (int k = 0; k < 2; k++)
+            {
+                float t = (Phase * 0.55f + k * 0.5f) % 1f;
+                var pt = CubicPoint(t, ax, ay, mx, ay, mx, dy, dx, dy);
+                using var pg = new SolidBrush(Color.FromArgb(95, 34, 211, 238));
+                g.FillEllipse(pg, pt.X - 6f, pt.Y - 6f, 12f, 12f);
+                g.FillEllipse(Brushes.White, pt.X - 2.3f, pt.Y - 2.3f, 4.6f, 4.6f);
+            }
         }
 
+        // 5. Frosted Holographic Device Cards with Dual Radial Arc Gauges
         using var titleFont = new Font("Segoe UI Semibold", 9.5f);
-        using var subFont = new Font("Segoe UI", 8.2f);
-        using var monoFont = new Font("Consolas", 8f);
+        using var subFont = new Font("Segoe UI", 8f);
+        using var monoFont = new Font("Consolas", 7.8f, FontStyle.Bold);
         using var inkBrush = new SolidBrush(Color.FromArgb(241, 245, 249));
-        using var mutedBrush = new SolidBrush(Color.FromArgb(148, 163, 184));
-        using var greenBrush = new SolidBrush(Color.FromArgb(16, 185, 129));
-        using var blueBrush = new SolidBrush(Color.FromArgb(59, 130, 246));
-        using var trackBrush = new SolidBrush(Color.FromArgb(28, 36, 50));
+        using var mutedBrush = new SolidBrush(Color.FromArgb(139, 163, 196));
+        using var trackPen = new Pen(Color.FromArgb(90, 30, 51, 84), 3.4f);
 
         foreach (var d in Devices)
         {
@@ -943,36 +1087,58 @@ internal sealed class SpatialMapPanel : Panel
             bool isSelf = d.Id == SelfId;
             bool isSel = d.Id == SelectedId;
 
-            using var path = RoundedRect(r, 11f);
-            using var bg = new SolidBrush(isSel ? Color.FromArgb(24, 33, 49) : Color.FromArgb(19, 24, 32));
-            g.FillPath(bg, path);
+            if (isSel || isSelf)
+            {
+                var gr = new RectangleF(r.X - 2, r.Y - 2, r.Width + 4, r.Height + 4);
+                using var gp = RoundedRect(gr, 13f);
+                using var auraPen = new Pen(isSel ? Color.FromArgb(65, 34, 211, 238) : Color.FromArgb(50, 16, 185, 129), 5.5f);
+                g.DrawPath(auraPen, gp);
+            }
 
-            var borderColor = isSel ? Color.FromArgb(59, 130, 246) : (isSelf ? Color.FromArgb(180, 16, 185, 129) : Color.FromArgb(37, 46, 62));
-            using var borderPen = new Pen(borderColor, isSel ? 1.8f : 1.1f);
-            g.DrawPath(borderPen, path);
+            using var path = RoundedRect(r, 12f);
+            using (var fill = new LinearGradientBrush(r, isSel ? Color.FromArgb(235, 22, 36, 62) : Color.FromArgb(225, 14, 22, 40), Color.FromArgb(235, 9, 14, 26), 45f))
+                g.FillPath(fill, path);
 
-            g.FillEllipse(greenBrush, r.X + 12, r.Y + 15, 8, 8);
-            var label = d.Name.Length > 20 ? d.Name[..20] : d.Name;
-            g.DrawString(label, titleFont, inkBrush, r.X + 25, r.Y + 11);
+            using (var borderBrush = new LinearGradientBrush(r, isSel ? Color.FromArgb(34, 211, 238) : (isSelf ? Color.FromArgb(16, 185, 129) : Color.FromArgb(42, 72, 112)), isSel ? Color.FromArgb(139, 92, 246) : Color.FromArgb(29, 46, 77), 45f))
+            using (var borderPen = new Pen(borderBrush, isSel ? 1.9f : 1.1f))
+                g.DrawPath(borderPen, path);
 
-            var role = isSelf ? "Este PC" : (isSel ? "Alvo" : "Peer LAN");
+            // Vector Hardware Glyph
+            using (var iconPen = new Pen(isSel ? Color.FromArgb(34, 211, 238) : (isSelf ? Color.FromArgb(16, 185, 129) : Color.FromArgb(96, 165, 250)), 1.5f))
+            {
+                if (d.Os.Equals("android", StringComparison.OrdinalIgnoreCase))
+                    g.DrawRectangle(iconPen, r.X + 14, r.Y + 13, 11, 18);
+                else
+                {
+                    g.DrawRectangle(iconPen, r.X + 12, r.Y + 14, 17, 12);
+                    g.DrawLine(iconPen, r.X + 16, r.Y + 29, r.X + 25, r.Y + 29);
+                }
+            }
+
+            var label = d.Name.Length > 18 ? d.Name[..18] : d.Name;
+            g.DrawString(label, titleFont, inkBrush, r.X + 36, r.Y + 11);
+            var role = isSelf ? "Este PC" : (isSel ? "Alvo Ativo" : "LAN Direta");
             var batTxt = d.BatteryLevel.HasValue ? $" · {d.BatteryLevel}%" : "";
-            g.DrawString($"{d.Os.ToUpperInvariant()} · {role}{batTxt}", subFont, mutedBrush, r.X + 12, r.Y + 31);
+            g.DrawString($"{d.Os.ToUpperInvariant()} · {role}{batTxt}", subFont, mutedBrush, r.X + 36, r.Y + 28);
 
-            // CPU meter
-            float barX = r.X + 68, barW = r.Width - 82;
-            g.DrawString($"CPU {d.CpuUsage}%", monoFont, mutedBrush, r.X + 12, r.Y + 53);
-            g.FillRectangle(trackBrush, barX, r.Y + 56, barW, 6);
-            if (d.CpuUsage > 0) g.FillRectangle(blueBrush, barX, r.Y + 56, Math.Max(4f, barW * Math.Min(100, d.CpuUsage) / 100f), 6);
-
-            // RAM meter
-            g.DrawString($"RAM {d.RamUsage}%", monoFont, mutedBrush, r.X + 12, r.Y + 73);
-            g.FillRectangle(trackBrush, barX, r.Y + 76, barW, 6);
-            if (d.RamUsage > 0) g.FillRectangle(greenBrush, barX, r.Y + 76, Math.Max(4f, barW * Math.Min(100, d.RamUsage) / 100f), 6);
+            DrawRadialGauge(g, r.X + 38, r.Y + 78, 17f, d.CpuUsage, "CPU", Color.FromArgb(34, 211, 238), trackPen, monoFont, subFont, inkBrush, mutedBrush);
+            DrawRadialGauge(g, r.X + 128, r.Y + 78, 17f, d.RamUsage, "RAM", Color.FromArgb(139, 92, 246), trackPen, monoFont, subFont, inkBrush, mutedBrush);
         }
+    }
 
-        using var hintBrush = new SolidBrush(Color.FromArgb(110, 148, 163, 184));
-        g.DrawString("Arraste os dispositivos para posicionar no espaço · Clique para selecionar alvo", subFont, hintBrush, 14, Height - 24);
+    private static void DrawRadialGauge(Graphics g, float cx, float cy, float rad, int val, string label, Color color, Pen trackPen, Font monoFont, Font subFont, Brush inkBrush, Brush mutedBrush)
+    {
+        var rect = new RectangleF(cx - rad, cy - rad, rad * 2f, rad * 2f);
+        g.DrawEllipse(trackPen, rect);
+        if (val > 0)
+        {
+            using var valPen = new Pen(color, 3.4f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawArc(valPen, rect, -90f, Math.Clamp(val, 0, 100) * 3.6f);
+        }
+        var txt = $"{val}%";
+        var sz = g.MeasureString(txt, monoFont);
+        g.DrawString(txt, monoFont, inkBrush, cx - sz.Width / 2f, cy - sz.Height / 2f);
+        g.DrawString(label, subFont, mutedBrush, cx + rad + 5f, cy - 7f);
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
@@ -999,8 +1165,8 @@ internal sealed class SpatialMapPanel : Panel
         if (_dragId == null) return;
         var d = Devices.FirstOrDefault(x => x.Id == _dragId);
         if (d == null) return;
-        d.X = Math.Clamp(e.X + _dragOffset.X, 106, Math.Max(120, Width - 106));
-        d.Y = Math.Clamp(e.Y + _dragOffset.Y, 60, Math.Max(80, Height - 60));
+        d.X = Math.Clamp(e.X + _dragOffset.X, 112, Math.Max(130, Width - 112));
+        d.Y = Math.Clamp(e.Y + _dragOffset.Y, 64, Math.Max(80, Height - 64));
         Invalidate();
     }
 
@@ -1018,9 +1184,9 @@ internal sealed class SpatialMapPanel : Panel
 }
 
 // ---------------------------------------------------------------------------
-// Custom DoubleBuffered Tactile Trackpad Panel (GDI+ dot-grid + ripples)
+// Holographic Trackpad Panel (HUD Brackets + Luminous Comet Trail + Multi-Ring Shockwaves)
 // ---------------------------------------------------------------------------
-internal sealed class TrackpadPanel : Panel
+internal sealed class HolographicTrackpadPanel : Panel
 {
     public double Sensitivity { get; set; } = 1.6;
     public event Action<double, double>? PointerMoved;
@@ -1030,71 +1196,96 @@ internal sealed class TrackpadPanel : Panel
     private Point? _lastPt;
     private Point? _cursorPt;
     private bool _moved;
+    private readonly List<(PointF Pt, long T0)> _trail = new();
     private readonly List<(PointF Pt, long T0)> _ripples = new();
 
-    public TrackpadPanel()
+    public HolographicTrackpadPanel()
     {
         DoubleBuffered = true;
-        BackColor = Color.FromArgb(11, 14, 20);
+        BackColor = Color.FromArgb(5, 8, 16);
         Cursor = Cursors.Cross;
     }
 
-    public bool HasActiveRipples => _ripples.Count > 0;
+    public bool HasActiveEffects => _ripples.Count > 0 || _trail.Count > 0;
 
     protected override void OnPaint(PaintEventArgs e)
     {
         base.OnPaint(e);
+        if (Width <= 4 || Height <= 4) return;
         var g = e.Graphics;
         g.SmoothingMode = SmoothingMode.AntiAlias;
 
-        using (var dot = new SolidBrush(Color.FromArgb(55, 89, 112, 153)))
+        using (var bg = new LinearGradientBrush(ClientRectangle, Color.FromArgb(11, 20, 38), Color.FromArgb(5, 8, 16), 90f))
+            g.FillRectangle(bg, ClientRectangle);
+
+        using (var dot = new SolidBrush(Color.FromArgb(58, 34, 211, 238)))
         {
             for (int gx = 24; gx < Width; gx += 24)
                 for (int gy = 24; gy < Height; gy += 24)
                     g.FillEllipse(dot, gx - 1, gy - 1, 2f, 2f);
         }
 
-        using (var f = new Font("Segoe UI", 9.5f))
-        using (var br = new SolidBrush(Color.FromArgb(125, 148, 163, 184)))
+        // HUD Corner Brackets
+        using (var bp = new Pen(Color.FromArgb(150, 34, 211, 238), 2f))
         {
-            var hint = "Superfície Tátil de Precisão · Arraste para mover · Clique Esq/Dir · Scroll do mouse";
+            float m = 16f, b = 20f;
+            g.DrawLine(bp, m, m, m + b, m); g.DrawLine(bp, m, m, m, m + b);
+            g.DrawLine(bp, Width - m, m, Width - m - b, m); g.DrawLine(bp, Width - m, m, Width - m, m + b);
+            g.DrawLine(bp, m, Height - m, m + b, Height - m); g.DrawLine(bp, m, Height - m, m, Height - m - b);
+            g.DrawLine(bp, Width - m, Height - m, Width - m - b, Height - m); g.DrawLine(bp, Width - m, Height - m, Width - m, Height - m - b);
+        }
+
+        if (!_cursorPt.HasValue)
+        {
+            using var f = new Font("Segoe UI", 9.5f);
+            using var br = new SolidBrush(Color.FromArgb(135, 139, 163, 196));
+            var hint = "Superfície Tátil Holográfica · Arraste para mover · Clique Esq/Dir · Scroll";
             var sz = g.MeasureString(hint, f);
             g.DrawString(hint, f, br, (Width - sz.Width) / 2f, (Height - sz.Height) / 2f);
         }
 
         long now = Environment.TickCount64;
-        _ripples.RemoveAll(r => now - r.T0 > 450);
+        _trail.RemoveAll(t => now - t.T0 > 260);
+        for (int i = 1; i < _trail.Count; i++)
+        {
+            float age = (now - _trail[i].T0) / 260f;
+            int alpha = Math.Clamp((int)((1f - age) * 210), 0, 255);
+            using var tp = new Pen(Color.FromArgb(alpha, 34, 211, 238), (1f - age) * 6f + 1.5f) { StartCap = LineCap.Round, EndCap = LineCap.Round };
+            g.DrawLine(tp, _trail[i - 1].Pt, _trail[i].Pt);
+        }
+
+        _ripples.RemoveAll(r => now - r.T0 > 460);
         foreach (var r in _ripples)
         {
-            float p = (now - r.T0) / 450f;
-            int alpha = Math.Clamp((int)((1f - p) * 185), 0, 255);
-            float rad = 10f + p * 38f;
-            using var pen = new Pen(Color.FromArgb(alpha, 59, 130, 246), 2f);
-            g.DrawEllipse(pen, r.Pt.X - rad, r.Pt.Y - rad, rad * 2f, rad * 2f);
+            float p = (now - r.T0) / 460f;
+            int alpha = Math.Clamp((int)((1f - p) * 210), 0, 255);
+            float rad1 = 10f + p * 48f;
+            float rad2 = 6f + p * 30f;
+            using var p1 = new Pen(Color.FromArgb(alpha, 34, 211, 238), 2f);
+            using var p2 = new Pen(Color.FromArgb(alpha / 2, 139, 92, 246), 1.6f);
+            g.DrawEllipse(p1, r.Pt.X - rad1, r.Pt.Y - rad1, rad1 * 2f, rad1 * 2f);
+            g.DrawEllipse(p2, r.Pt.X - rad2, r.Pt.Y - rad2, rad2 * 2f, rad2 * 2f);
         }
 
         if (_cursorPt.HasValue)
         {
             var pt = _cursorPt.Value;
-            using var glow = new SolidBrush(Color.FromArgb(60, 59, 130, 246));
-            using var core = new SolidBrush(Color.FromArgb(96, 165, 250));
-            g.FillEllipse(glow, pt.X - 18, pt.Y - 18, 36, 36);
-            g.FillEllipse(core, pt.X - 5, pt.Y - 5, 10, 10);
+            using var glow = new SolidBrush(Color.FromArgb(75, 34, 211, 238));
+            g.FillEllipse(glow, pt.X - 20, pt.Y - 20, 40, 40);
+            g.FillEllipse(Brushes.White, pt.X - 4.5f, pt.Y - 4.5f, 9f, 9f);
         }
     }
 
     protected override void OnMouseDown(MouseEventArgs e)
     {
         base.OnMouseDown(e);
+        long now = Environment.TickCount64;
         _cursorPt = e.Location;
-        _ripples.Add((e.Location, Environment.TickCount64));
-        if (e.Button == MouseButtons.Right)
-            Clicked?.Invoke("right");
-        else
-        {
-            _lastPt = e.Location;
-            _moved = false;
-        }
+        _trail.Clear();
+        _trail.Add((e.Location, now));
+        _ripples.Add((e.Location, now));
+        if (e.Button == MouseButtons.Right) Clicked?.Invoke("right");
+        else { _lastPt = e.Location; _moved = false; }
         Invalidate();
     }
 
@@ -1107,6 +1298,8 @@ internal sealed class TrackpadPanel : Panel
             double dy = (e.Y - _lastPt.Value.Y) * Sensitivity;
             _lastPt = e.Location;
             _cursorPt = e.Location;
+            _trail.Add((e.Location, Environment.TickCount64));
+            if (_trail.Count > 24) _trail.RemoveAt(0);
             if (Math.Abs(dx) > 0.4 || Math.Abs(dy) > 0.4)
             {
                 _moved = true;
@@ -1137,20 +1330,20 @@ internal sealed class TrackpadPanel : Panel
 }
 
 // ---------------------------------------------------------------------------
-// Main Continuum v3.0 Native Windows Desktop Form
+// Main Continuum v4.0 Native Windows Desktop Form (Holographic UI + 3-Layer Auto LAN Mesh)
 // ---------------------------------------------------------------------------
 public sealed class ContinuumForm : Form
 {
-    private static readonly Color CBg = Color.FromArgb(9, 11, 14);
-    private static readonly Color CSidebar = Color.FromArgb(15, 19, 25);
-    private static readonly Color CCard = Color.FromArgb(17, 22, 30);
-    private static readonly Color CSubtle = Color.FromArgb(12, 16, 22);
-    private static readonly Color CBorder = Color.FromArgb(31, 39, 53);
+    private static readonly Color CBg = Color.FromArgb(5, 8, 16);
+    private static readonly Color CSidebar = Color.FromArgb(10, 16, 30);
+    private static readonly Color CCard = Color.FromArgb(14, 22, 40);
+    private static readonly Color CSubtle = Color.FromArgb(9, 16, 30);
+    private static readonly Color CBorder = Color.FromArgb(30, 51, 84);
     private static readonly Color CText = Color.FromArgb(241, 245, 249);
-    private static readonly Color CMuted = Color.FromArgb(148, 163, 184);
+    private static readonly Color CMuted = Color.FromArgb(139, 163, 196);
+    private static readonly Color CCyan = Color.FromArgb(34, 211, 238);
     private static readonly Color CAccent = Color.FromArgb(59, 130, 246);
     private static readonly Color CGreen = Color.FromArgb(16, 185, 129);
-    private static readonly Color CAmber = Color.FromArgb(245, 158, 11);
 
     private readonly string _deviceId;
     private readonly string _deviceName;
@@ -1168,12 +1361,12 @@ public sealed class ContinuumForm : Form
     private string _connectedHubLabel = "Hub Local LAN";
     private int? _rttMs;
     private bool _allowExit;
+    private string _activeTab = "map";
 
     private readonly List<PeerDevice> _devices = new();
     private string? _selectedId;
     private readonly Dictionary<string, (string Name, long Size, int Total, Dictionary<int, string> Chunks)> _incomingFiles = new();
 
-    // UI references
     private readonly Dictionary<string, Button> _navButtons = new();
     private readonly Dictionary<string, Panel> _views = new();
     private readonly Label _lblPageTitle;
@@ -1184,8 +1377,8 @@ public sealed class ContinuumForm : Form
     private readonly Label _lblToast;
     private readonly TextBox _txtRoomTop;
     private readonly TextBox _txtManualIp;
-    private readonly SpatialMapPanel _mapPanel;
-    private readonly TrackpadPanel _trackpad;
+    private readonly HolographicSpatialMapPanel _mapPanel;
+    private readonly HolographicTrackpadPanel _trackpad;
     private readonly ProgressBar _fileProgress;
     private readonly Label _lblFileStatus;
     private readonly ListBox _listFiles;
@@ -1193,7 +1386,7 @@ public sealed class ContinuumForm : Form
     private readonly ListBox _listLanPeers;
     private readonly ListBox _listNotifs;
     private readonly NotifyIcon _tray;
-    private readonly System.Windows.Forms.Timer _uiTimer;
+    private readonly System.Windows.Forms.Timer _animTimer;
 
     private readonly List<ClipEntry> _clipItems = new();
     private readonly List<DiscoveredHub> _lanPeers = new();
@@ -1211,41 +1404,43 @@ public sealed class ContinuumForm : Form
         _downloadsDir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), "Downloads", "Continuum");
         _cfg = LoadConfig();
 
-        _hub = new EmbeddedLanHub(_deviceId, _cfg.WsPort > 0 ? _cfg.WsPort : NetworkUtil.DefaultWsPort);
+        _hub = new EmbeddedLanHub(_deviceId, () => _cfg.RoomCode, _cfg.WsPort > 0 ? _cfg.WsPort : NetworkUtil.DefaultWsPort);
         _hub.Start();
-        _discovery = new UdpDiscoveryService(_hub, () => _cfg.RoomCode, OnLanPeersDiscovered);
+        _discovery = new UdpDiscoveryService(_hub, () => _cfg.RoomCode, OnLanPeersDiscovered, OnScanProgress);
         _discovery.Start();
 
-        Text = "Continuum 3.0 — Malha Direta LAN";
-        Size = new Size(1120, 720);
-        MinimumSize = new Size(920, 600);
+        Text = "Continuum 4.0 — Malha Holográfica LAN";
+        Size = new Size(1160, 740);
+        MinimumSize = new Size(940, 620);
         StartPosition = FormStartPosition.CenterScreen;
         BackColor = CBg;
         ForeColor = CText;
         Font = new Font("Segoe UI", 9.5f);
 
-        // ==================== SIDEBAR (232px) ====================
-        var sidebar = new Panel { Dock = DockStyle.Left, Width = 232, BackColor = CSidebar, Padding = new Padding(14) };
-        sidebar.Paint += (s, e) =>
-        {
-            using var pen = new Pen(CBorder);
-            e.Graphics.DrawLine(pen, sidebar.Width - 1, 0, sidebar.Width - 1, sidebar.Height);
-        };
+        // ==================== SIDEBAR ====================
+        var sidebar = new Panel { Dock = DockStyle.Left, Width = 242, BackColor = CSidebar, Padding = new Padding(14) };
+        sidebar.Paint += (s, e) => { using var pen = new Pen(CBorder); e.Graphics.DrawLine(pen, sidebar.Width - 1, 0, sidebar.Width - 1, sidebar.Height); };
 
-        var lblBrand = new Label { Text = "Continuum", Font = new Font("Segoe UI", 14f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Top, Height = 30 };
-        var lblSub = new Label { Text = "v3.0.0 · Malha Direta LAN", Font = new Font("Segoe UI", 8.5f), ForeColor = CMuted, Dock = DockStyle.Top, Height = 24 };
+        var lblBrand = new Label { Text = "CONTINUUM", Font = new Font("Segoe UI", 13.5f, FontStyle.Bold), ForeColor = CCyan, Dock = DockStyle.Top, Height = 28 };
+        var lblSub = new Label { Text = "v4.0.0 · Spatial LAN Mesh", Font = new Font("Segoe UI", 8.5f), ForeColor = CMuted, Dock = DockStyle.Top, Height = 22 };
 
-        var hubBox = new Panel { Dock = DockStyle.Bottom, Height = 82, BackColor = CSubtle, Padding = new Padding(10) };
+        var hubBox = new Panel { Dock = DockStyle.Bottom, Height = 112, BackColor = CSubtle, Padding = new Padding(10) };
         hubBox.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, hubBox.ClientRectangle, CBorder, ButtonBorderStyle.Solid);
         var lblHubH = new Label { Text = "HUB LAN EMBUTIDO", Font = new Font("Segoe UI", 7.5f, FontStyle.Bold), ForeColor = CMuted, Dock = DockStyle.Top, Height = 16 };
-        var lblHubIp = new Label { Text = $"{NetworkUtil.GetLocalLanIp()}:{_hub.Port}", Font = new Font("Consolas", 9.5f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Top, Height = 22 };
+        var lanAddr = $"{NetworkUtil.GetLocalLanIp()}:{_hub.Port}";
+        var lblHubIp = new Label { Text = lanAddr, Font = new Font("Consolas", 9.5f, FontStyle.Bold), ForeColor = CCyan, Dock = DockStyle.Top, Height = 22 };
         _lblHubMeta = new Label { Text = $"Malha {_cfg.RoomCode} · 1 nó", Font = new Font("Segoe UI", 8.2f), ForeColor = CMuted, Dock = DockStyle.Top, Height = 20 };
+        var btnCopyAddr = MakeSecondaryButton("Copiar IP LAN", 190);
+        btnCopyAddr.Dock = DockStyle.Bottom;
+        btnCopyAddr.Height = 28;
+        btnCopyAddr.Click += (_, _) => { try { Clipboard.SetText(lanAddr); ShowToast($"Endereço {lanAddr} copiado!"); } catch { } };
+        hubBox.Controls.Add(btnCopyAddr);
         hubBox.Controls.Add(_lblHubMeta);
         hubBox.Controls.Add(lblHubIp);
         hubBox.Controls.Add(lblHubH);
 
         var navHost = new Panel { Dock = DockStyle.Fill, Padding = new Padding(0, 12, 0, 12), BackColor = CSidebar };
-        var navSpecs = new[] { ("map", "Mapa Espacial"), ("remote", "Controle Remoto"), ("transfer", "Arquivos & Clipboard"), ("network", "Rede LAN & Alertas") };
+        var navSpecs = new[] { ("map", "Mapa Holográfico"), ("remote", "Trackpad & Controle"), ("transfer", "Arquivos & Clipboard"), ("network", "Radar LAN & Alertas") };
         foreach (var (key, title) in navSpecs.Reverse())
         {
             var btn = new Button
@@ -1259,10 +1454,9 @@ public sealed class ContinuumForm : Form
                 BackColor = CSidebar,
                 Font = new Font("Segoe UI Semibold", 9.5f),
                 Cursor = Cursors.Hand,
-                Margin = new Padding(0, 2, 0, 2),
             };
             btn.FlatAppearance.BorderSize = 0;
-            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(24, 31, 44);
+            btn.FlatAppearance.MouseOverBackColor = Color.FromArgb(18, 29, 52);
             btn.Click += (_, _) => SwitchTab(key);
             navHost.Controls.Add(btn);
             _navButtons[key] = btn;
@@ -1273,57 +1467,47 @@ public sealed class ContinuumForm : Form
         sidebar.Controls.Add(lblSub);
         sidebar.Controls.Add(lblBrand);
 
-        // ==================== MAIN CONTENT AREA ====================
+        // ==================== MAIN HOST ====================
         var mainHost = new Panel { Dock = DockStyle.Fill, BackColor = CBg };
 
-        // Top Bar
-        var topbar = new Panel { Dock = DockStyle.Top, Height = 56, BackColor = Color.FromArgb(14, 18, 23), Padding = new Padding(16, 10, 16, 10) };
-        topbar.Paint += (s, e) =>
-        {
-            using var pen = new Pen(CBorder);
-            e.Graphics.DrawLine(pen, 0, topbar.Height - 1, topbar.Width, topbar.Height - 1);
-        };
-        _lblPageTitle = new Label { Text = "Mapa Espacial de Dispositivos", Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), ForeColor = CText, AutoSize = true, Location = new Point(16, 16) };
+        var topbar = new Panel { Dock = DockStyle.Top, Height = 58, BackColor = Color.FromArgb(8, 14, 27), Padding = new Padding(16, 10, 16, 10) };
+        topbar.Paint += (s, e) => { using var pen = new Pen(CBorder); e.Graphics.DrawLine(pen, 0, topbar.Height - 1, topbar.Width, topbar.Height - 1); };
+        _lblPageTitle = new Label { Text = "Mapa Espacial Holográfico", Font = new Font("Segoe UI", 11.5f, FontStyle.Bold), ForeColor = CText, AutoSize = true, Location = new Point(16, 17) };
         var topRight = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, FlowDirection = FlowDirection.LeftToRight, WrapContents = false, BackColor = Color.Transparent, Padding = new Padding(0, 3, 0, 0) };
-        _lblConnStatus = new Label { Text = "● Inicializando Hub LAN...", ForeColor = CAmber, AutoSize = true, Margin = new Padding(0, 6, 14, 0), Font = new Font("Segoe UI Semibold", 9f) };
-        _txtRoomTop = new TextBox { Text = _cfg.RoomCode, Width = 88, BackColor = CBg, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 9.5f), Margin = new Padding(0, 3, 6, 0) };
-        var btnRoom = MakeSecondaryButton("Trocar Malha", 104);
+        _lblConnStatus = new Label { Text = "◌ Inicializando Radar LAN...", ForeColor = CCyan, AutoSize = true, Margin = new Padding(0, 6, 12, 0), Font = new Font("Segoe UI Semibold", 9f) };
+        var btnScanTop = MakePrimaryButton("Escanear Wi-Fi", 112);
+        btnScanTop.Click += (_, _) => _ = _discovery.ScanSubnetTcpAsync();
+        _txtRoomTop = new TextBox { Text = _cfg.RoomCode, Width = 78, BackColor = CBg, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Consolas", 9.5f), Margin = new Padding(6, 3, 6, 0) };
+        var btnRoom = MakeSecondaryButton("Malha", 68);
         btnRoom.Click += (_, _) => ApplyConnection(_txtRoomTop.Text, _txtManualIp?.Text ?? "", string.IsNullOrWhiteSpace(_txtManualIp?.Text));
         topRight.Controls.Add(_lblConnStatus);
+        topRight.Controls.Add(btnScanTop);
         topRight.Controls.Add(_txtRoomTop);
         topRight.Controls.Add(btnRoom);
         topbar.Controls.Add(_lblPageTitle);
         topbar.Controls.Add(topRight);
 
-        // Bottom Toast Bar
         var toastBar = new Panel { Dock = DockStyle.Bottom, Height = 30, BackColor = CBg, Padding = new Padding(16, 4, 16, 4) };
-        _lblToast = new Label { Text = $"Hub LAN ativo em {NetworkUtil.GetLocalLanIp()}:{_hub.Port} · Comunicação direta entre apps", ForeColor = CMuted, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8.5f) };
+        _lblToast = new Label { Text = $"Hub LAN ativo em {lanAddr} · Radar híbrido UDP + TCP /24", ForeColor = CMuted, Dock = DockStyle.Fill, Font = new Font("Segoe UI", 8.5f) };
         toastBar.Controls.Add(_lblToast);
 
         var contentHost = new Panel { Dock = DockStyle.Fill, BackColor = CBg, Padding = new Padding(14) };
 
-        // ==================== VIEW 1: SPATIAL MAP ====================
+        // ==================== VIEW 1: HOLOGRAPHIC SPATIAL MAP ====================
         var viewMap = new Panel { Dock = DockStyle.Fill, BackColor = CBg };
         var selBar = new Panel { Dock = DockStyle.Bottom, Height = 54, BackColor = CCard, Padding = new Padding(12, 10, 12, 10) };
         selBar.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, selBar.ClientRectangle, CBorder, ButtonBorderStyle.Solid);
-        _lblSelected = new Label { Text = "Clique em um dispositivo no mapa ou arraste para reorganizar.", ForeColor = CMuted, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
+        _lblSelected = new Label { Text = "Radar holográfico ativo · Arraste dispositivos para posicionar no espaço.", ForeColor = CMuted, Dock = DockStyle.Fill, TextAlign = ContentAlignment.MiddleLeft };
         var selBtns = new FlowLayoutPanel { Dock = DockStyle.Right, AutoSize = true, WrapContents = false, BackColor = CCard };
-        var btnSelCtrl = MakePrimaryButton("Controlar", 96);
-        btnSelCtrl.Click += (_, _) => SwitchTab("remote");
-        var btnSelPing = MakeSecondaryButton("Localizar", 88);
-        btnSelPing.Click += (_, _) => SendRemoteEvent(new JsonObject { ["kind"] = "media", ["action"] = "ping" });
-        var btnSelFile = MakeSecondaryButton("Enviar Arquivo", 112);
-        btnSelFile.Click += (_, _) => PickAndSendFile();
-        selBtns.Controls.Add(btnSelCtrl);
-        selBtns.Controls.Add(btnSelPing);
-        selBtns.Controls.Add(btnSelFile);
-        selBar.Controls.Add(_lblSelected);
-        selBar.Controls.Add(selBtns);
+        var btnSelCtrl = MakePrimaryButton("Controlar", 96); btnSelCtrl.Click += (_, _) => SwitchTab("remote");
+        var btnSelPing = MakeSecondaryButton("Localizar", 88); btnSelPing.Click += (_, _) => SendRemoteEvent(new JsonObject { ["kind"] = "media", ["action"] = "ping" });
+        var btnSelFile = MakeSecondaryButton("Enviar Arquivo", 112); btnSelFile.Click += (_, _) => PickAndSendFile();
+        selBtns.Controls.Add(btnSelCtrl); selBtns.Controls.Add(btnSelPing); selBtns.Controls.Add(btnSelFile);
+        selBar.Controls.Add(_lblSelected); selBar.Controls.Add(selBtns);
 
-        _mapPanel = new SpatialMapPanel { Dock = DockStyle.Fill, SelfId = _deviceId };
+        _mapPanel = new HolographicSpatialMapPanel { Dock = DockStyle.Fill, SelfId = _deviceId };
         _mapPanel.DeviceSelected += dev => { _selectedId = dev.Id; UpdateSelectedUi(); };
         _mapPanel.DeviceMoved += (id, x, y) => _ = SendJsonAsync(new JsonObject { ["type"] = "device:move", ["deviceId"] = id, ["x"] = x, ["y"] = y });
-
         var mapFrame = new Panel { Dock = DockStyle.Fill, Padding = new Padding(1), BackColor = CBorder };
         mapFrame.Controls.Add(_mapPanel);
         viewMap.Controls.Add(mapFrame);
@@ -1331,37 +1515,24 @@ public sealed class ContinuumForm : Form
         viewMap.Controls.Add(selBar);
         _views["map"] = viewMap;
 
-        // ==================== VIEW 2: TRACKPAD & MEDIA ====================
+        // ==================== VIEW 2: HOLOGRAPHIC TRACKPAD ====================
         var viewRemote = new Panel { Dock = DockStyle.Fill, BackColor = CBg };
         var remTop = new Panel { Dock = DockStyle.Top, Height = 38, BackColor = CBg };
-        _lblRemoteTarget = new Label { Text = "Controlando: selecione um peer", Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Left, AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
+        _lblRemoteTarget = new Label { Text = "Controlando: selecione um dispositivo", Font = new Font("Segoe UI", 10.5f, FontStyle.Bold), ForeColor = CCyan, Dock = DockStyle.Left, AutoSize = true, Padding = new Padding(0, 6, 0, 0) };
         var sensTrack = new TrackBar { Minimum = 8, Maximum = 32, Value = Math.Clamp((int)(_cfg.Sensitivity * 10), 8, 32), Width = 140, Dock = DockStyle.Right, TickStyle = TickStyle.None };
         sensTrack.ValueChanged += (_, _) => { _cfg.Sensitivity = sensTrack.Value / 10.0; _trackpad.Sensitivity = _cfg.Sensitivity; };
         var lblSens = new Label { Text = "Sensibilidade", ForeColor = CMuted, Dock = DockStyle.Right, AutoSize = true, Padding = new Padding(0, 8, 6, 0) };
-        remTop.Controls.Add(_lblRemoteTarget);
-        remTop.Controls.Add(sensTrack);
-        remTop.Controls.Add(lblSens);
+        remTop.Controls.Add(_lblRemoteTarget); remTop.Controls.Add(sensTrack); remTop.Controls.Add(lblSens);
 
         var kbRow = new Panel { Dock = DockStyle.Bottom, Height = 40, BackColor = CBg, Padding = new Padding(0, 6, 0, 0) };
         var txtRemote = new TextBox { Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, Font = new Font("Segoe UI", 10f) };
-        var btnSendTxt = MakePrimaryButton("Enviar Texto", 108);
-        btnSendTxt.Dock = DockStyle.Right;
-        var btnEnter = MakeSecondaryButton("Enter", 68);
-        btnEnter.Dock = DockStyle.Right;
-        void SendTyped()
-        {
-            if (!string.IsNullOrEmpty(txtRemote.Text))
-            {
-                SendRemoteEvent(new JsonObject { ["kind"] = "text", ["text"] = txtRemote.Text });
-                txtRemote.Clear();
-            }
-        }
+        var btnSendTxt = MakePrimaryButton("Enviar Texto", 108); btnSendTxt.Dock = DockStyle.Right;
+        var btnEnter = MakeSecondaryButton("Enter", 68); btnEnter.Dock = DockStyle.Right;
+        void SendTyped() { if (!string.IsNullOrEmpty(txtRemote.Text)) { SendRemoteEvent(new JsonObject { ["kind"] = "text", ["text"] = txtRemote.Text }); txtRemote.Clear(); } }
         btnSendTxt.Click += (_, _) => SendTyped();
         txtRemote.KeyDown += (_, e) => { if (e.KeyCode == Keys.Enter) { e.SuppressKeyPress = true; SendTyped(); } };
         btnEnter.Click += (_, _) => SendRemoteEvent(new JsonObject { ["kind"] = "key", ["key"] = "Enter" });
-        kbRow.Controls.Add(txtRemote);
-        kbRow.Controls.Add(btnSendTxt);
-        kbRow.Controls.Add(btnEnter);
+        kbRow.Controls.Add(txtRemote); kbRow.Controls.Add(btnSendTxt); kbRow.Controls.Add(btnEnter);
 
         var actFlow = new FlowLayoutPanel { Dock = DockStyle.Bottom, Height = 44, BackColor = CBg, Padding = new Padding(0, 6, 0, 0) };
         var acts = new (string Label, Action Act)[]
@@ -1376,24 +1547,16 @@ public sealed class ContinuumForm : Form
             ("Bloquear", () => SendRemoteEvent(new JsonObject { ["kind"] = "media", ["action"] = "lock" })),
             ("Localizar", () => SendRemoteEvent(new JsonObject { ["kind"] = "media", ["action"] = "ping" })),
         };
-        foreach (var (lbl, act) in acts)
-        {
-            var b = MakeSecondaryButton(lbl, 86);
-            b.Click += (_, _) => act();
-            actFlow.Controls.Add(b);
-        }
+        foreach (var (lbl, act) in acts) { var b = MakeSecondaryButton(lbl, 86); b.Click += (_, _) => act(); actFlow.Controls.Add(b); }
 
-        _trackpad = new TrackpadPanel { Dock = DockStyle.Fill, Sensitivity = _cfg.Sensitivity };
+        _trackpad = new HolographicTrackpadPanel { Dock = DockStyle.Fill, Sensitivity = _cfg.Sensitivity };
         _trackpad.PointerMoved += (dx, dy) => SendRemoteEvent(new JsonObject { ["kind"] = "move", ["dx"] = dx, ["dy"] = dy });
         _trackpad.Clicked += btn => SendRemoteEvent(new JsonObject { ["kind"] = "click", ["button"] = btn });
         _trackpad.Scrolled += dy => SendRemoteEvent(new JsonObject { ["kind"] = "scroll", ["dx"] = 0, ["dy"] = dy });
         var tpFrame = new Panel { Dock = DockStyle.Fill, Padding = new Padding(1), BackColor = CBorder };
         tpFrame.Controls.Add(_trackpad);
 
-        viewRemote.Controls.Add(tpFrame);
-        viewRemote.Controls.Add(actFlow);
-        viewRemote.Controls.Add(kbRow);
-        viewRemote.Controls.Add(remTop);
+        viewRemote.Controls.Add(tpFrame); viewRemote.Controls.Add(actFlow); viewRemote.Controls.Add(kbRow); viewRemote.Controls.Add(remTop);
         _views["remote"] = viewRemote;
 
         // ==================== VIEW 3: FILES & CLIPBOARD ====================
@@ -1405,80 +1568,52 @@ public sealed class ContinuumForm : Form
         fileCard.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, fileCard.ClientRectangle, CBorder, ButtonBorderStyle.Solid);
         var lblFh = new Label { Text = "Transferência Direta LAN", Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Top, Height = 26 };
         var fileBtns = new FlowLayoutPanel { Dock = DockStyle.Top, Height = 42, BackColor = CCard };
-        var btnSendFile = MakePrimaryButton("Escolher e Enviar Arquivo", 180);
-        btnSendFile.Click += (_, _) => PickAndSendFile();
-        var btnOpenDl = MakeSecondaryButton("Abrir Downloads", 124);
-        btnOpenDl.Click += (_, _) => { Directory.CreateDirectory(_downloadsDir); Process.Start(new ProcessStartInfo("explorer.exe", _downloadsDir) { UseShellExecute = true }); };
-        fileBtns.Controls.Add(btnSendFile);
-        fileBtns.Controls.Add(btnOpenDl);
+        var btnSendFile = MakePrimaryButton("Escolher e Enviar Arquivo", 180); btnSendFile.Click += (_, _) => PickAndSendFile();
+        var btnOpenDl = MakeSecondaryButton("Abrir Downloads", 124); btnOpenDl.Click += (_, _) => { Directory.CreateDirectory(_downloadsDir); Process.Start(new ProcessStartInfo("explorer.exe", _downloadsDir) { UseShellExecute = true }); };
+        fileBtns.Controls.Add(btnSendFile); fileBtns.Controls.Add(btnOpenDl);
         _lblFileStatus = new Label { Text = "Pronto para transferência em velocidade local", ForeColor = CMuted, Dock = DockStyle.Top, Height = 22 };
         _fileProgress = new ProgressBar { Dock = DockStyle.Top, Height = 12, Maximum = 100, Style = ProgressBarStyle.Continuous };
         _listFiles = new ListBox { Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
-        fileCard.Controls.Add(_listFiles);
-        fileCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 });
-        fileCard.Controls.Add(_fileProgress);
-        fileCard.Controls.Add(_lblFileStatus);
-        fileCard.Controls.Add(fileBtns);
-        fileCard.Controls.Add(lblFh);
+        fileCard.Controls.Add(_listFiles); fileCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); fileCard.Controls.Add(_fileProgress); fileCard.Controls.Add(_lblFileStatus); fileCard.Controls.Add(fileBtns); fileCard.Controls.Add(lblFh);
 
         var clipCard = new Panel { Dock = DockStyle.Fill, BackColor = CCard, Padding = new Padding(14), Margin = new Padding(6, 0, 0, 0) };
         clipCard.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, clipCard.ClientRectangle, CBorder, ButtonBorderStyle.Solid);
         var lblCh = new Label { Text = "Área de Transferência Universal", Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Top, Height = 26 };
         var clipInputRow = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = CCard };
         var txtClip = new TextBox { Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle };
-        var btnPushClip = MakePrimaryButton("Enviar", 72);
-        btnPushClip.Dock = DockStyle.Right;
-        var btnGrabClip = MakeSecondaryButton("Capturar", 78);
-        btnGrabClip.Dock = DockStyle.Right;
+        var btnPushClip = MakePrimaryButton("Enviar", 72); btnPushClip.Dock = DockStyle.Right;
+        var btnGrabClip = MakeSecondaryButton("Capturar", 78); btnGrabClip.Dock = DockStyle.Right;
         btnPushClip.Click += (_, _) => { if (!string.IsNullOrWhiteSpace(txtClip.Text)) { PushClipboard(txtClip.Text); txtClip.Clear(); } };
         btnGrabClip.Click += (_, _) => { try { if (Clipboard.ContainsText()) PushClipboard(Clipboard.GetText()); } catch { } };
-        clipInputRow.Controls.Add(txtClip);
-        clipInputRow.Controls.Add(btnPushClip);
-        clipInputRow.Controls.Add(btnGrabClip);
-        var btnCopySel = MakeSecondaryButton("Copiar Item Selecionado", 170);
-        btnCopySel.Dock = DockStyle.Bottom;
-        btnCopySel.Click += (_, _) =>
-        {
-            int idx = _listClipboard.SelectedIndex;
-            if (idx >= 0 && idx < _clipItems.Count)
-            {
-                try { Clipboard.SetText(_clipItems[idx].Content); ShowToast("Copiado para a área de transferência do Windows."); } catch { }
-            }
-        };
+        clipInputRow.Controls.Add(txtClip); clipInputRow.Controls.Add(btnPushClip); clipInputRow.Controls.Add(btnGrabClip);
+        var btnCopySel = MakeSecondaryButton("Copiar Item Selecionado", 170); btnCopySel.Dock = DockStyle.Bottom;
+        btnCopySel.Click += (_, _) => { int idx = _listClipboard.SelectedIndex; if (idx >= 0 && idx < _clipItems.Count) { try { Clipboard.SetText(_clipItems[idx].Content); ShowToast("Copiado!"); } catch { } } };
         _listClipboard = new ListBox { Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
-        clipCard.Controls.Add(_listClipboard);
-        clipCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 });
-        clipCard.Controls.Add(clipInputRow);
-        clipCard.Controls.Add(lblCh);
-        clipCard.Controls.Add(btnCopySel);
+        clipCard.Controls.Add(_listClipboard); clipCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); clipCard.Controls.Add(clipInputRow); clipCard.Controls.Add(lblCh); clipCard.Controls.Add(btnCopySel);
 
-        viewTransfer.Controls.Add(fileCard, 0, 0);
-        viewTransfer.Controls.Add(clipCard, 1, 0);
+        viewTransfer.Controls.Add(fileCard, 0, 0); viewTransfer.Controls.Add(clipCard, 1, 0);
         _views["transfer"] = viewTransfer;
 
-        // ==================== VIEW 4: LAN DISCOVERY & ALERTS ====================
+        // ==================== VIEW 4: HYBRID LAN RADAR & ALERTS ====================
         var viewNet = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 2, RowCount = 1, BackColor = CBg };
         viewNet.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 55f));
         viewNet.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 45f));
 
         var lanCard = new Panel { Dock = DockStyle.Fill, BackColor = CCard, Padding = new Padding(14), Margin = new Padding(0, 0, 6, 0) };
         lanCard.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, lanCard.ClientRectangle, CBorder, ButtonBorderStyle.Solid);
-        var lblLh = new Label { Text = "Rede Local Direta (P2P · Sem App Web)", Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Top, Height = 26 };
-        var lblLs = new Label { Text = $"Hub local em {NetworkUtil.GetLocalLanIp()}:{_hub.Port} (UDP {NetworkUtil.UdpPort}). Apps Continuum no Linux e Android na mesma rede Wi-Fi conectam-se diretamente.", ForeColor = CMuted, Dock = DockStyle.Top, Height = 40 };
+        var lblLh = new Label { Text = "Radar Híbrido Wi-Fi / LAN (UDP + TCP /24)", Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = CCyan, Dock = DockStyle.Top, Height = 26 };
+        var lblLs = new Label { Text = $"Hub Windows ativo em {lanAddr}. Aceita conexões diretas do Linux e Android, e também escaneia automaticamente toda a rede local.", ForeColor = CMuted, Dock = DockStyle.Top, Height = 40 };
+        var btnScanNet = MakePrimaryButton("Escanear Rede LAN Agora", 180); btnScanNet.Dock = DockStyle.Top;
+        btnScanNet.Click += (_, _) => _ = _discovery.ScanSubnetTcpAsync();
         var manRow = new Panel { Dock = DockStyle.Top, Height = 36, BackColor = CCard };
-        _txtManualIp = new TextBox { Text = _cfg.ManualPeer, Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "IP manual (ex: 192.168.1.42:45891)" };
-        var btnConnIp = MakePrimaryButton("Conectar IP", 92);
-        btnConnIp.Dock = DockStyle.Right;
-        var btnAutoLan = MakeSecondaryButton("Auto LAN", 82);
-        btnAutoLan.Dock = DockStyle.Right;
+        _txtManualIp = new TextBox { Text = _cfg.ManualPeer, Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, PlaceholderText = "IP do peer (aceita 192.168.1.x, .42, http:// ou ws://)" };
+        var btnConnIp = MakePrimaryButton("Conectar", 82); btnConnIp.Dock = DockStyle.Right;
+        var btnAutoLan = MakeSecondaryButton("Auto LAN", 82); btnAutoLan.Dock = DockStyle.Right;
         btnConnIp.Click += (_, _) => ApplyConnection(_txtRoomTop.Text, _txtManualIp.Text, false);
         btnAutoLan.Click += (_, _) => { _txtManualIp.Clear(); ApplyConnection(_txtRoomTop.Text, "", true); };
-        manRow.Controls.Add(_txtManualIp);
-        manRow.Controls.Add(btnConnIp);
-        manRow.Controls.Add(btnAutoLan);
+        manRow.Controls.Add(_txtManualIp); manRow.Controls.Add(btnConnIp); manRow.Controls.Add(btnAutoLan);
 
-        var btnConnectDisc = MakePrimaryButton("Conectar ao Hub Selecionado", 200);
-        btnConnectDisc.Dock = DockStyle.Bottom;
+        var btnConnectDisc = MakePrimaryButton("Conectar ao Dispositivo Selecionado", 220); btnConnectDisc.Dock = DockStyle.Bottom;
         btnConnectDisc.Click += (_, _) =>
         {
             int idx = _listLanPeers.SelectedIndex;
@@ -1491,60 +1626,38 @@ public sealed class ContinuumForm : Form
             }
         };
         _listLanPeers = new ListBox { Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
-        lanCard.Controls.Add(_listLanPeers);
-        lanCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 });
-        lanCard.Controls.Add(manRow);
-        lanCard.Controls.Add(lblLs);
-        lanCard.Controls.Add(lblLh);
-        lanCard.Controls.Add(btnConnectDisc);
+        lanCard.Controls.Add(_listLanPeers); lanCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); lanCard.Controls.Add(manRow); lanCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 6 }); lanCard.Controls.Add(btnScanNet); lanCard.Controls.Add(lblLs); lanCard.Controls.Add(lblLh); lanCard.Controls.Add(btnConnectDisc);
 
         var alertCard = new Panel { Dock = DockStyle.Fill, BackColor = CCard, Padding = new Padding(14), Margin = new Padding(6, 0, 0, 0) };
         alertCard.Paint += (s, e) => ControlPaint.DrawBorder(e.Graphics, alertCard.ClientRectangle, CBorder, ButtonBorderStyle.Solid);
         var lblAh = new Label { Text = "Alertas da Malha LAN", Font = new Font("Segoe UI", 11f, FontStyle.Bold), ForeColor = CText, Dock = DockStyle.Top, Height = 26 };
-        var btnTestAlert = MakeSecondaryButton("Enviar Alerta de Teste", 160);
-        btnTestAlert.Dock = DockStyle.Top;
-        btnTestAlert.Click += (_, _) => _ = SendJsonAsync(new JsonObject
-        {
-            ["type"] = "notification:push",
-            ["title"] = $"Alerta de {Environment.MachineName}",
-            ["body"] = "Comunicação direta LAN ativa no Windows.",
-            ["sourceDeviceId"] = _deviceId,
-            ["sourceDeviceName"] = _deviceName,
-        });
+        var btnTestAlert = MakeSecondaryButton("Enviar Alerta de Teste", 160); btnTestAlert.Dock = DockStyle.Top;
+        btnTestAlert.Click += (_, _) => _ = SendJsonAsync(new JsonObject { ["type"] = "notification:push", ["title"] = $"Alerta de {Environment.MachineName}", ["body"] = "Comunicação holográfica LAN ativa no Windows.", ["sourceDeviceId"] = _deviceId, ["sourceDeviceName"] = _deviceName });
         _listNotifs = new ListBox { Dock = DockStyle.Fill, BackColor = CSubtle, ForeColor = CText, BorderStyle = BorderStyle.FixedSingle, IntegralHeight = false };
-        alertCard.Controls.Add(_listNotifs);
-        alertCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 });
-        alertCard.Controls.Add(btnTestAlert);
-        alertCard.Controls.Add(lblAh);
+        alertCard.Controls.Add(_listNotifs); alertCard.Controls.Add(new Panel { Dock = DockStyle.Top, Height = 8 }); alertCard.Controls.Add(btnTestAlert); alertCard.Controls.Add(lblAh);
 
-        viewNet.Controls.Add(lanCard, 0, 0);
-        viewNet.Controls.Add(alertCard, 1, 0);
+        viewNet.Controls.Add(lanCard, 0, 0); viewNet.Controls.Add(alertCard, 1, 0);
         _views["network"] = viewNet;
 
-        foreach (var v in _views.Values)
-        {
-            v.Visible = false;
-            contentHost.Controls.Add(v);
-        }
+        foreach (var v in _views.Values) { v.Visible = false; contentHost.Controls.Add(v); }
+        mainHost.Controls.Add(contentHost); mainHost.Controls.Add(toastBar); mainHost.Controls.Add(topbar);
+        Controls.Add(mainHost); Controls.Add(sidebar);
 
-        mainHost.Controls.Add(contentHost);
-        mainHost.Controls.Add(toastBar);
-        mainHost.Controls.Add(topbar);
-
-        Controls.Add(mainHost);
-        Controls.Add(sidebar);
-
-        // System Tray
-        _tray = new NotifyIcon { Text = "Continuum 3.0 — Malha LAN", Icon = SystemIcons.Application, Visible = true };
+        _tray = new NotifyIcon { Text = "Continuum 4.0 — Malha Holográfica LAN", Icon = SystemIcons.Application, Visible = true };
         var trayMenu = new ContextMenuStrip();
         trayMenu.Items.Add("Abrir Continuum", null, (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); });
         trayMenu.Items.Add("Sair", null, (_, _) => { _allowExit = true; Close(); });
         _tray.ContextMenuStrip = trayMenu;
         _tray.DoubleClick += (_, _) => { Show(); WindowState = FormWindowState.Normal; Activate(); };
 
-        _uiTimer = new System.Windows.Forms.Timer { Interval = 45 };
-        _uiTimer.Tick += (_, _) => { if (_trackpad.HasActiveRipples) _trackpad.Invalidate(); };
-        _uiTimer.Start();
+        _animTimer = new System.Windows.Forms.Timer { Interval = 33 };
+        _animTimer.Tick += (_, _) =>
+        {
+            _mapPanel.Phase = (_mapPanel.Phase + 0.033f) % 1000f;
+            if (_activeTab == "map") _mapPanel.Invalidate();
+            else if (_activeTab == "remote" && _trackpad.HasActiveEffects) _trackpad.Invalidate();
+        };
+        _animTimer.Start();
 
         SwitchTab("map");
         _ = Task.Run(RunWebSocketLoopAsync);
@@ -1554,59 +1667,48 @@ public sealed class ContinuumForm : Form
     private static Button MakePrimaryButton(string text, int width)
     {
         var b = new Button { Text = text, Width = width, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = CAccent, ForeColor = Color.White, Font = new Font("Segoe UI Semibold", 8.8f), Cursor = Cursors.Hand };
-        b.FlatAppearance.BorderSize = 0;
+        b.FlatAppearance.BorderColor = CCyan;
+        b.FlatAppearance.BorderSize = 1;
         return b;
     }
 
     private static Button MakeSecondaryButton(string text, int width)
     {
-        var b = new Button { Text = text, Width = width, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(23, 29, 38), ForeColor = CText, Font = new Font("Segoe UI", 8.8f), Cursor = Cursors.Hand };
-        b.FlatAppearance.BorderColor = Color.FromArgb(42, 52, 70);
+        var b = new Button { Text = text, Width = width, Height = 32, FlatStyle = FlatStyle.Flat, BackColor = Color.FromArgb(14, 23, 42), ForeColor = CText, Font = new Font("Segoe UI", 8.8f), Cursor = Cursors.Hand };
+        b.FlatAppearance.BorderColor = CBorder;
         b.FlatAppearance.BorderSize = 1;
         return b;
     }
 
     private void SwitchTab(string key)
     {
+        _activeTab = key;
         foreach (var kv in _views) kv.Value.Visible = kv.Key == key;
         foreach (var kv in _navButtons)
         {
             bool active = kv.Key == key;
-            kv.Value.BackColor = active ? Color.FromArgb(23, 32, 48) : CSidebar;
-            kv.Value.ForeColor = active ? Color.White : CMuted;
+            kv.Value.BackColor = active ? Color.FromArgb(16, 36, 66) : CSidebar;
+            kv.Value.ForeColor = active ? CCyan : CMuted;
         }
         _lblPageTitle.Text = key switch
         {
-            "map" => "Mapa Espacial de Dispositivos",
-            "remote" => "Controle Remoto · Trackpad & Mídia",
-            "transfer" => "Arquivos & Área de Transferência",
-            _ => "Rede Local Direta (P2P) & Alertas",
+            "map" => "Mapa Espacial Holográfico",
+            "remote" => "Superfície Tátil Holográfica & Mídia",
+            "transfer" => "Arquivos LAN & Área de Transferência",
+            _ => "Radar Híbrido Wi-Fi P2P & Alertas",
         };
     }
 
-    private void RunUi(Action act)
-    {
-        if (IsDisposed) return;
-        if (InvokeRequired) BeginInvoke(act); else act();
-    }
-
+    private void RunUi(Action act) { if (!IsDisposed) { if (InvokeRequired) BeginInvoke(act); else act(); } }
     private void ShowToast(string msg) => RunUi(() => _lblToast.Text = msg);
 
     private AppConfig LoadConfig()
     {
-        try
-        {
-            if (File.Exists(_configPath))
-                return JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(_configPath)) ?? new AppConfig();
-        }
-        catch { }
+        try { if (File.Exists(_configPath)) return JsonSerializer.Deserialize<AppConfig>(File.ReadAllText(_configPath)) ?? new AppConfig(); } catch { }
         return new AppConfig();
     }
 
-    private void SaveConfig()
-    {
-        try { File.WriteAllText(_configPath, JsonSerializer.Serialize(_cfg, new JsonSerializerOptions { WriteIndented = true })); } catch { }
-    }
+    private void SaveConfig() { try { File.WriteAllText(_configPath, JsonSerializer.Serialize(_cfg, new JsonSerializerOptions { WriteIndented = true })); } catch { } }
 
     private void ApplyConnection(string room, string manualPeer, bool autoLan)
     {
@@ -1625,6 +1727,16 @@ public sealed class ContinuumForm : Form
         try { old.Cancel(); } catch { }
     }
 
+    private void OnScanProgress(bool scanning, int pct)
+    {
+        RunUi(() =>
+        {
+            _mapPanel.Scanning = scanning;
+            _mapPanel.ScanPct = pct;
+            ShowToast(scanning ? $"Radar Wi-Fi escaneando rede local... {pct}%" : $"Varredura concluída · {_lanPeers.Count} peer(s) detectado(s).");
+        });
+    }
+
     private void OnLanPeersDiscovered()
     {
         var peers = _discovery.ListPeers();
@@ -1634,7 +1746,7 @@ public sealed class ContinuumForm : Form
             _lanPeers.AddRange(peers);
             _listLanPeers.Items.Clear();
             foreach (var p in peers)
-                _listLanPeers.Items.Add($"{p.HubName} ({p.Os.ToUpperInvariant()}) · {p.Ip}:{p.WsPort} · Malha {p.RoomCode}");
+                _listLanPeers.Items.Add($"{p.HubName} ({p.Os.ToUpperInvariant()}) · {p.Ip}:{p.WsPort} · {p.Via} · {p.RoomCode}");
         });
 
         if (_cfg.AutoLan && string.IsNullOrWhiteSpace(_cfg.ManualPeer))
@@ -1652,7 +1764,10 @@ public sealed class ContinuumForm : Form
     private (string Url, string Label) ResolveTargetWs()
     {
         if (!string.IsNullOrWhiteSpace(_cfg.ManualPeer))
-            return (NetworkUtil.NormalizeWsEndpoint(_cfg.ManualPeer), $"Peer LAN ({_cfg.ManualPeer})");
+        {
+            var url = NetworkUtil.NormalizeWsEndpoint(_cfg.ManualPeer);
+            if (!string.IsNullOrEmpty(url)) return (url, $"Peer LAN ({_cfg.ManualPeer})");
+        }
         if (_cfg.AutoLan)
         {
             var best = _discovery.ElectBestHub(_cfg.RoomCode);
@@ -1665,24 +1780,10 @@ public sealed class ContinuumForm : Form
     private JsonObject CollectTelemetry()
     {
         int ramPct = 0;
-        try
-        {
-            var mem = new Win32Native.MEMORYSTATUSEX();
-            if (Win32Native.GlobalMemoryStatusEx(mem)) ramPct = (int)mem.dwMemoryLoad;
-        }
-        catch { }
-
+        try { var mem = new Win32Native.MEMORYSTATUSEX(); if (Win32Native.GlobalMemoryStatusEx(mem)) ramPct = (int)mem.dwMemoryLoad; } catch { }
         var ps = SystemInformation.PowerStatus;
         int? bat = ps.BatteryChargeStatus == BatteryChargeStatus.NoSystemBattery ? null : (int)Math.Round(ps.BatteryLifePercent * 100);
-        return new JsonObject
-        {
-            ["cpuUsage"] = 14,
-            ["memoryUsagePercent"] = ramPct,
-            ["batteryLevel"] = bat,
-            ["networkType"] = "LAN Direta",
-            ["lanIp"] = NetworkUtil.GetLocalLanIp(),
-            ["displayServer"] = "win32",
-        };
+        return new JsonObject { ["cpuUsage"] = 14, ["memoryUsagePercent"] = ramPct, ["batteryLevel"] = bat, ["networkType"] = "LAN Direta", ["lanIp"] = NetworkUtil.GetLocalLanIp(), ["displayServer"] = "win32" };
     }
 
     private async Task SendJsonAsync(JsonObject obj)
@@ -1691,42 +1792,24 @@ public sealed class ContinuumForm : Form
         if (ws == null || ws.State != WebSocketState.Open) return;
         var bytes = Encoding.UTF8.GetBytes(obj.ToJsonString());
         await _sendLock.WaitAsync();
-        try
-        {
-            if (ws.State == WebSocketState.Open)
-                await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None);
-        }
+        try { if (ws.State == WebSocketState.Open) await ws.SendAsync(new ArraySegment<byte>(bytes), WebSocketMessageType.Text, true, CancellationToken.None); }
         catch { }
         finally { _sendLock.Release(); }
     }
 
-    private PeerDevice? GetTargetDevice()
-    {
-        if (!string.IsNullOrEmpty(_selectedId))
-        {
-            var exact = _devices.FirstOrDefault(d => d.Id == _selectedId);
-            if (exact != null) return exact;
-        }
-        return _devices.FirstOrDefault(d => d.Id != _deviceId) ?? _devices.FirstOrDefault();
-    }
+    private PeerDevice? GetTargetDevice() => (!string.IsNullOrEmpty(_selectedId) ? _devices.FirstOrDefault(d => d.Id == _selectedId) : null) ?? _devices.FirstOrDefault(d => d.Id != _deviceId) ?? _devices.FirstOrDefault();
 
     private void SendRemoteEvent(JsonObject ev)
     {
         var tgt = GetTargetDevice();
-        if (tgt == null) { ShowToast("Selecione um dispositivo alvo no Mapa Espacial."); return; }
+        if (tgt == null) { ShowToast("Selecione um dispositivo alvo no Mapa Holográfico."); return; }
         _ = SendJsonAsync(new JsonObject { ["type"] = "input:event", ["targetDeviceId"] = tgt.Id, ["event"] = ev });
     }
 
     private void PushClipboard(string text)
     {
-        _ = SendJsonAsync(new JsonObject
-        {
-            ["type"] = "clipboard:push",
-            ["content"] = text,
-            ["sourceDeviceId"] = _deviceId,
-            ["sourceDeviceName"] = _deviceName,
-        });
-        ShowToast("Texto sincronizado com todos os dispositivos da malha.");
+        _ = SendJsonAsync(new JsonObject { ["type"] = "clipboard:push", ["content"] = text, ["sourceDeviceId"] = _deviceId, ["sourceDeviceName"] = _deviceName });
+        ShowToast("Texto sincronizado com toda a malha LAN.");
     }
 
     private void PickAndSendFile()
@@ -1745,17 +1828,7 @@ public sealed class ContinuumForm : Form
                 var tid = $"ft-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
                 const int chunkSize = 48 * 1024;
                 int total = Math.Max(1, (int)((info.Length + chunkSize - 1) / chunkSize));
-
-                var startObj = new JsonObject
-                {
-                    ["type"] = "file:start",
-                    ["transferId"] = tid,
-                    ["fileName"] = info.Name,
-                    ["fileSize"] = info.Length,
-                    ["totalChunks"] = total,
-                    ["sourceDeviceId"] = _deviceId,
-                    ["sourceDeviceName"] = _deviceName,
-                };
+                var startObj = new JsonObject { ["type"] = "file:start", ["transferId"] = tid, ["fileName"] = info.Name, ["fileSize"] = info.Length, ["totalChunks"] = total, ["sourceDeviceId"] = _deviceId, ["sourceDeviceName"] = _deviceName };
                 if (!string.IsNullOrEmpty(targetId)) startObj["targetDeviceId"] = targetId;
                 await SendJsonAsync(startObj);
 
@@ -1764,13 +1837,7 @@ public sealed class ContinuumForm : Form
                 for (int i = 0; i < total; i++)
                 {
                     int read = await fs.ReadAsync(buf, 0, chunkSize);
-                    var chunkObj = new JsonObject
-                    {
-                        ["type"] = "file:chunk",
-                        ["transferId"] = tid,
-                        ["chunkIndex"] = i,
-                        ["data"] = Convert.ToBase64String(buf, 0, read),
-                    };
+                    var chunkObj = new JsonObject { ["type"] = "file:chunk", ["transferId"] = tid, ["chunkIndex"] = i, ["data"] = Convert.ToBase64String(buf, 0, read) };
                     if (!string.IsNullOrEmpty(targetId)) chunkObj["targetDeviceId"] = targetId;
                     await SendJsonAsync(chunkObj);
                     int pct = (int)(((i + 1) * 100.0) / total);
@@ -1781,12 +1848,7 @@ public sealed class ContinuumForm : Form
                 var doneObj = new JsonObject { ["type"] = "file:complete", ["transferId"] = tid };
                 if (!string.IsNullOrEmpty(targetId)) doneObj["targetDeviceId"] = targetId;
                 await SendJsonAsync(doneObj);
-                RunUi(() =>
-                {
-                    _fileProgress.Value = 100;
-                    _lblFileStatus.Text = $"Concluído: {info.Name}";
-                    _listFiles.Items.Insert(0, $"Enviado: {info.Name} ({Math.Max(1, info.Length / 1024)} KB)");
-                });
+                RunUi(() => { _fileProgress.Value = 100; _lblFileStatus.Text = $"Concluído: {info.Name}"; _listFiles.Items.Insert(0, $"Enviado: {info.Name} ({Math.Max(1, info.Length / 1024)} KB)"); });
             }
             catch (Exception ex) { ShowToast($"Erro ao enviar arquivo: {ex.Message}"); }
         });
@@ -1802,8 +1864,8 @@ public sealed class ContinuumForm : Form
         }
         else
         {
-            _lblSelected.Text = "Aguardando outros dispositivos Continuum na mesma rede Wi-Fi.";
-            _lblRemoteTarget.Text = "Controlando: nenhum peer conectado";
+            _lblSelected.Text = "Radar holográfico ativo · Abra o Continuum no Linux ou Android na mesma rede Wi-Fi.";
+            _lblRemoteTarget.Text = "Controlando: buscando dispositivos...";
         }
     }
 
@@ -1823,7 +1885,7 @@ public sealed class ContinuumForm : Form
                 Os = o["os"]?.GetValue<string>() ?? "desktop",
                 Kind = o["kind"]?.GetValue<string>() ?? "desktop",
                 X = o["x"]?.GetValue<double>() ?? (180 + (idx % 3) * 230),
-                Y = o["y"]?.GetValue<double>() ?? (130 + (idx / 3) * 165),
+                Y = o["y"]?.GetValue<double>() ?? (140 + (idx / 3) * 165),
                 CpuUsage = tel?["cpuUsage"]?.GetValue<int>() ?? 0,
                 RamUsage = tel?["memoryUsagePercent"]?.GetValue<int>() ?? 0,
                 BatteryLevel = tel?["batteryLevel"]?.GetValue<int?>(),
@@ -1831,16 +1893,12 @@ public sealed class ContinuumForm : Form
             });
             idx++;
         }
-
         RunUi(() =>
         {
-            _devices.Clear();
-            _devices.AddRange(parsed);
-            if (string.IsNullOrEmpty(_selectedId))
-                _selectedId = _devices.FirstOrDefault(d => d.Id != _deviceId)?.Id;
+            _devices.Clear(); _devices.AddRange(parsed);
+            if (string.IsNullOrEmpty(_selectedId)) _selectedId = _devices.FirstOrDefault(d => d.Id != _deviceId)?.Id;
             _mapPanel.Devices = _devices.ToList();
             _mapPanel.SelectedId = _selectedId;
-            _mapPanel.Invalidate();
             _lblHubMeta.Text = $"Malha {_cfg.RoomCode} · {_devices.Count} nó(s)";
             UpdateSelectedUi();
         });
@@ -1866,9 +1924,8 @@ public sealed class ContinuumForm : Form
         {
             var ct = _wsCts.Token;
             var (url, label) = ResolveTargetWs();
-            _connectedUrl = url;
-            _connectedHubLabel = label;
-            RunUi(() => { _lblConnStatus.Text = $"● Conectando ({label})..."; _lblConnStatus.ForeColor = CAmber; });
+            _connectedUrl = url; _connectedHubLabel = label;
+            RunUi(() => { _lblConnStatus.Text = $"◌ Conectando ({label})..."; _lblConnStatus.ForeColor = CCyan; });
 
             using var ws = new ClientWebSocket();
             try
@@ -1876,25 +1933,14 @@ public sealed class ContinuumForm : Form
                 using var timeoutCts = CancellationTokenSource.CreateLinkedTokenSource(ct);
                 timeoutCts.CancelAfter(5000);
                 await ws.ConnectAsync(new Uri(url), timeoutCts.Token);
-                _ws = ws;
-                _connected = true;
-
+                _ws = ws; _connected = true;
                 RunUi(() => { _lblConnStatus.Text = $"● {label}"; _lblConnStatus.ForeColor = CGreen; });
 
                 await SendJsonAsync(new JsonObject
                 {
                     ["type"] = "mesh:join",
                     ["roomCode"] = _cfg.RoomCode,
-                    ["device"] = new JsonObject
-                    {
-                        ["id"] = _deviceId,
-                        ["name"] = _deviceName,
-                        ["os"] = "windows",
-                        ["kind"] = "desktop",
-                        ["status"] = "online",
-                        ["companionConnected"] = true,
-                        ["telemetry"] = CollectTelemetry(),
-                    }
+                    ["device"] = new JsonObject { ["id"] = _deviceId, ["name"] = _deviceName, ["os"] = "windows", ["kind"] = "desktop", ["status"] = "online", ["companionConnected"] = true, ["telemetry"] = CollectTelemetry() }
                 });
                 await SendJsonAsync(new JsonObject { ["type"] = "telemetry:ping", ["sentAt"] = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() });
 
@@ -1906,21 +1952,17 @@ public sealed class ContinuumForm : Form
                     if (res.MessageType == WebSocketMessageType.Close) break;
                     sb.Append(Encoding.UTF8.GetString(recvBuf, 0, res.Count));
                     if (!res.EndOfMessage) continue;
-                    var raw = sb.ToString();
-                    sb.Clear();
+                    var raw = sb.ToString(); sb.Clear();
                     HandleServerMessage(raw);
                 }
             }
             catch { }
             finally
             {
-                _connected = false;
-                _ws = null;
-                RunUi(() => { _lblConnStatus.Text = $"● Reconectando ({label})..."; _lblConnStatus.ForeColor = CAmber; });
+                _connected = false; _ws = null;
+                RunUi(() => { _lblConnStatus.Text = $"◌ Reconectando ({label})..."; _lblConnStatus.ForeColor = CCyan; });
             }
-
-            if (!ct.IsCancellationRequested)
-                try { await Task.Delay(1800, ct); } catch { }
+            if (!ct.IsCancellationRequested) try { await Task.Delay(1800, ct); } catch { }
         }
     }
 
@@ -1936,92 +1978,57 @@ public sealed class ContinuumForm : Form
             UpdateDevicesFromJson(msg["devices"] as JsonArray);
             var clips = msg["clipboard"] as JsonArray;
             if (clips != null)
-            {
                 RunUi(() =>
                 {
-                    _clipItems.Clear();
-                    _listClipboard.Items.Clear();
+                    _clipItems.Clear(); _listClipboard.Items.Clear();
                     foreach (var n in clips)
                     {
                         if (n is not JsonObject c) continue;
                         var entry = new ClipEntry { Id = c["id"]?.GetValue<string>() ?? "", Content = c["content"]?.GetValue<string>() ?? "", SourceDeviceName = c["sourceDeviceName"]?.GetValue<string>() ?? "Peer" };
-                        _clipItems.Add(entry);
-                        _listClipboard.Items.Add($"[{entry.SourceDeviceName}] {entry.Content.Replace("\n", " ")}");
+                        _clipItems.Add(entry); _listClipboard.Items.Add($"[{entry.SourceDeviceName}] {entry.Content.Replace("\n", " ")}");
                     }
                 });
-            }
         }
-        else if (type == "mesh:devices_sync")
+        else if (type == "mesh:devices_sync") UpdateDevicesFromJson(msg["devices"] as JsonArray);
+        else if ((type == "device:joined" || type == "device:updated") && msg["device"] is JsonObject o)
         {
-            UpdateDevicesFromJson(msg["devices"] as JsonArray);
-        }
-        else if (type == "device:joined" || type == "device:updated")
-        {
-            if (msg["device"] is JsonObject o)
+            var id = o["id"]?.GetValue<string>() ?? "";
+            var tel = o["telemetry"] as JsonObject;
+            RunUi(() =>
             {
-                var id = o["id"]?.GetValue<string>() ?? "";
-                var tel = o["telemetry"] as JsonObject;
-                RunUi(() =>
-                {
-                    var existing = _devices.FirstOrDefault(d => d.Id == id);
-                    if (existing == null)
-                    {
-                        existing = new PeerDevice { Id = id };
-                        _devices.Add(existing);
-                    }
-                    existing.Name = o["name"]?.GetValue<string>() ?? existing.Name;
-                    existing.Os = o["os"]?.GetValue<string>() ?? existing.Os;
-                    existing.X = o["x"]?.GetValue<double>() ?? existing.X;
-                    existing.Y = o["y"]?.GetValue<double>() ?? existing.Y;
-                    if (tel != null)
-                    {
-                        existing.CpuUsage = tel["cpuUsage"]?.GetValue<int>() ?? existing.CpuUsage;
-                        existing.RamUsage = tel["memoryUsagePercent"]?.GetValue<int>() ?? existing.RamUsage;
-                        existing.BatteryLevel = tel["batteryLevel"]?.GetValue<int?>() ?? existing.BatteryLevel;
-                    }
-                    _mapPanel.Devices = _devices.ToList();
-                    _mapPanel.Invalidate();
-                    UpdateSelectedUi();
-                });
-            }
+                var existing = _devices.FirstOrDefault(d => d.Id == id);
+                if (existing == null) { existing = new PeerDevice { Id = id }; _devices.Add(existing); }
+                existing.Name = o["name"]?.GetValue<string>() ?? existing.Name;
+                existing.Os = o["os"]?.GetValue<string>() ?? existing.Os;
+                existing.X = o["x"]?.GetValue<double>() ?? existing.X;
+                existing.Y = o["y"]?.GetValue<double>() ?? existing.Y;
+                if (tel != null) { existing.CpuUsage = tel["cpuUsage"]?.GetValue<int>() ?? existing.CpuUsage; existing.RamUsage = tel["memoryUsagePercent"]?.GetValue<int>() ?? existing.RamUsage; existing.BatteryLevel = tel["batteryLevel"]?.GetValue<int?>() ?? existing.BatteryLevel; }
+                _mapPanel.Devices = _devices.ToList();
+                UpdateSelectedUi();
+            });
         }
         else if (type == "telemetry:pong")
         {
             var sent = msg["sentAt"]?.GetValue<long>() ?? 0;
-            if (sent > 0)
-            {
-                _rttMs = (int)Math.Max(1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - sent);
-                RunUi(() => { if (_connected) _lblConnStatus.Text = $"● {_connectedHubLabel} · {_rttMs} ms"; });
-            }
+            if (sent > 0) { _rttMs = (int)Math.Max(1, DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() - sent); RunUi(() => { if (_connected) _lblConnStatus.Text = $"● {_connectedHubLabel} · {_rttMs} ms"; }); }
         }
         else if (type == "clipboard:added" && msg["item"] is JsonObject cObj)
         {
             var entry = new ClipEntry { Id = cObj["id"]?.GetValue<string>() ?? "", Content = cObj["content"]?.GetValue<string>() ?? "", SourceDeviceName = cObj["sourceDeviceName"]?.GetValue<string>() ?? "Peer" };
-            RunUi(() =>
-            {
-                _clipItems.Insert(0, entry);
-                _listClipboard.Items.Insert(0, $"[{entry.SourceDeviceName}] {entry.Content.Replace("\n", " ")}");
-            });
+            RunUi(() => { _clipItems.Insert(0, entry); _listClipboard.Items.Insert(0, $"[{entry.SourceDeviceName}] {entry.Content.Replace("\n", " ")}"); });
         }
         else if (type == "notification:added" && msg["notification"] is JsonObject nObj)
         {
             var title = nObj["title"]?.GetValue<string>() ?? "Alerta";
             var body = nObj["body"]?.GetValue<string>() ?? "";
             var src = nObj["sourceDeviceName"]?.GetValue<string>() ?? "";
-            RunUi(() =>
-            {
-                _listNotifs.Items.Insert(0, $"[{src}] {title}: {body}");
-                if (nObj["sourceDeviceId"]?.GetValue<string>() != _deviceId)
-                    _tray.ShowBalloonTip(3000, title, body, ToolTipIcon.Info);
-            });
+            RunUi(() => { _listNotifs.Items.Insert(0, $"[{src}] {title}: {body}"); if (nObj["sourceDeviceId"]?.GetValue<string>() != _deviceId) _tray.ShowBalloonTip(3000, title, body, ToolTipIcon.Info); });
         }
         else if (type == "input:event" && msg["event"] is JsonObject evObj)
         {
             var target = msg["targetDeviceId"]?.GetValue<string>();
             if (string.IsNullOrEmpty(target) || target == _deviceId)
-            {
                 RunUi(() => Win32Native.ExecuteInput(evObj, (t, b) => _tray.ShowBalloonTip(3000, t, b, ToolTipIcon.Info)));
-            }
         }
         else if (type == "file:start")
         {
@@ -2029,9 +2036,7 @@ public sealed class ContinuumForm : Form
             if (!string.IsNullOrEmpty(tid) && msg["sourceDeviceId"]?.GetValue<string>() != _deviceId)
             {
                 var name = Path.GetFileName(msg["fileName"]?.GetValue<string>() ?? "arquivo.bin");
-                long sz = msg["fileSize"]?.GetValue<long>() ?? 0;
-                int tot = Math.Max(1, msg["totalChunks"]?.GetValue<int>() ?? 1);
-                _incomingFiles[tid] = (name, sz, tot, new Dictionary<int, string>());
+                _incomingFiles[tid] = (name, msg["fileSize"]?.GetValue<long>() ?? 0, Math.Max(1, msg["totalChunks"]?.GetValue<int>() ?? 1), new Dictionary<int, string>());
                 RunUi(() => { _fileProgress.Value = 0; _lblFileStatus.Text = $"Recebendo {name} · 0%"; });
             }
         }
@@ -2040,8 +2045,7 @@ public sealed class ContinuumForm : Form
             var tid = msg["transferId"]?.GetValue<string>() ?? "";
             if (_incomingFiles.TryGetValue(tid, out var rec))
             {
-                int idx = msg["chunkIndex"]?.GetValue<int>() ?? 0;
-                rec.Chunks[idx] = msg["data"]?.GetValue<string>() ?? "";
+                rec.Chunks[msg["chunkIndex"]?.GetValue<int>() ?? 0] = msg["data"]?.GetValue<string>() ?? "";
                 int pct = Math.Clamp((int)((rec.Chunks.Count * 100.0) / rec.Total), 0, 99);
                 RunUi(() => { _fileProgress.Value = pct; _lblFileStatus.Text = $"Recebendo {rec.Name} · {pct}%"; });
             }
@@ -2054,22 +2058,18 @@ public sealed class ContinuumForm : Form
                 try
                 {
                     Directory.CreateDirectory(_downloadsDir);
-                    var outPath = Path.Combine(_downloadsDir, rec.Name);
-                    using (var fs = File.Create(outPath))
+                    using (var fs = File.Create(Path.Combine(_downloadsDir, rec.Name)))
                     {
                         for (int i = 0; i < rec.Total; i++)
-                        {
                             if (rec.Chunks.TryGetValue(i, out var b64) && !string.IsNullOrEmpty(b64))
                             {
                                 var bytes = Convert.FromBase64String(b64);
                                 fs.Write(bytes, 0, bytes.Length);
                             }
-                        }
                     }
                     RunUi(() =>
                     {
-                        _fileProgress.Value = 100;
-                        _lblFileStatus.Text = $"Recebido: {rec.Name}";
+                        _fileProgress.Value = 100; _lblFileStatus.Text = $"Recebido: {rec.Name}";
                         _listFiles.Items.Insert(0, $"Recebido: {rec.Name} ({Math.Max(1, rec.Size / 1024)} KB)");
                         _tray.ShowBalloonTip(3000, "Continuum — Arquivo Recebido", $"{rec.Name} salvo em Downloads\\Continuum", ToolTipIcon.Info);
                     });
@@ -2083,17 +2083,11 @@ public sealed class ContinuumForm : Form
     {
         if (!_allowExit && e.CloseReason == CloseReason.UserClosing)
         {
-            e.Cancel = true;
-            Hide();
-            _tray.ShowBalloonTip(2000, "Continuum continua ativo", "Hub LAN em execução na bandeja do sistema.", ToolTipIcon.Info);
+            e.Cancel = true; Hide();
+            _tray.ShowBalloonTip(2000, "Continuum continua ativo", "Hub LAN holográfico rodando na bandeja.", ToolTipIcon.Info);
             return;
         }
-        _uiTimer.Stop();
-        _tray.Visible = false;
-        _tray.Dispose();
-        _wsCts.Cancel();
-        _discovery.Dispose();
-        _hub.Dispose();
+        _animTimer.Stop(); _tray.Visible = false; _tray.Dispose(); _wsCts.Cancel(); _discovery.Dispose(); _hub.Dispose();
         base.OnFormClosing(e);
     }
 }
@@ -2104,7 +2098,7 @@ internal static class Program
     private static void Main()
     {
         ApplicationConfiguration.Initialize();
-        using var mutex = new Mutex(true, "Global\\ContinuumWindowsNativeV3Mutex", out bool isNew);
+        using var mutex = new Mutex(true, "Global\\ContinuumWindowsNativeV4Mutex", out bool isNew);
         if (!isNew) return;
         Application.Run(new ContinuumForm());
     }
