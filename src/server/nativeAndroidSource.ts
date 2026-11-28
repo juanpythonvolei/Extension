@@ -74,8 +74,8 @@ android {
         applicationId = "app.continuum.nativeclient"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "5.0.0"
+        versionCode = 6
+        versionName = "5.1.0"
 
         buildConfigField("String", "DEFAULT_ROOM_CODE", "\\"\$defaultRoomCode\\"")
     }
@@ -243,7 +243,7 @@ import kotlin.math.abs
 import kotlin.math.max
 import kotlin.math.min
 
-private const val APP_VERSION = "5.0.0"
+private const val APP_VERSION = "5.1.0"
 private const val LAN_UDP_PORT = 45890
 private const val LAN_WS_PORT = 45891
 private const val PROTO_V5 = "continuum-lan-v5"
@@ -291,7 +291,8 @@ data class DiscoveredLanHub(
     val roomCode: String,
     val via: String,
     val remotePeers: Int,
-    val lastSeenMs: Long
+    val lastSeenMs: Long,
+    val needsReverseConnect: Boolean = false
 )
 
 data class ClipItem(val id: String, val content: String, val source: String)
@@ -378,7 +379,9 @@ class EmbeddedAndroidLanHub(
     val hubId: String,
     val hubName: String,
     private val getRoom: () -> String,
-    val port: Int = LAN_WS_PORT
+    val port: Int = LAN_WS_PORT,
+    private val getNeedsReverse: () -> Boolean = { false },
+    private val onRemotePeerJoined: ((String, String) -> Unit)? = null
 ) {
     private class Session(val sock: Socket, val out: OutputStream, val ip: String) {
         @Volatile var deviceId: String? = null
@@ -532,6 +535,7 @@ class EmbeddedAndroidLanHub(
                     .put("startedAt", startedAt)
                     .put("peers", peerCount(room))
                     .put("remotePeers", remotePeerCount())
+                    .put("needsReverseConnect", getNeedsReverse())
                     .put("version", APP_VERSION)
                     .toString()
                     .toByteArray(Charsets.UTF_8)
@@ -633,7 +637,8 @@ class EmbeddedAndroidLanHub(
     private fun processMessage(s: Session, msg: JSONObject) {
         when (msg.optString("type")) {
             "mesh:join" -> {
-                val room = msg.optString("roomCode", getRoom()).uppercase().replace(Regex("[^A-Z0-9]"), "").take(12).ifEmpty { "MESH01" }
+                // Canonical Hub Room Unification: all peers joining this LAN Hub share the Hub's active room
+                val room = getRoom().uppercase().replace(Regex("[^A-Z0-9]"), "").take(12).ifEmpty { "MESH01" }
                 val devIn = msg.optJSONObject("device") ?: JSONObject()
                 val did = devIn.optString("id").ifBlank { "peer-\${System.currentTimeMillis()}" }
                 val rd = getRoomData(room)
@@ -669,6 +674,9 @@ class EmbeddedAndroidLanHub(
                     .toString())
                 broadcastRoom(room, JSONObject().put("type", "device:joined").put("device", devRec), s)
                 broadcastRoom(room, JSONObject().put("type", "mesh:devices_sync").put("devices", devsArr))
+                if (did != hubId) {
+                    onRemotePeerJoined?.invoke(room, devRec.optString("name", "Dispositivo"))
+                }
             }
             "telemetry:ping" -> {
                 sendText(s, JSONObject().put("type", "telemetry:pong").put("sentAt", msg.optLong("sentAt")).put("serverTime", System.currentTimeMillis()).toString())
@@ -1248,6 +1256,7 @@ class MainActivity : AppCompatActivity() {
     @Volatile private var destroyed = false
     private var selectedDeviceId: String? = null
     @Volatile private var scanningLan = false
+    @Volatile private var needsReverseConnect = false
     private var isTabletMode = false
     private var fullscreenScreen = false
     private var autoClipboardSync = true
@@ -1322,7 +1331,27 @@ class MainActivity : AppCompatActivity() {
         val dm = resources.displayMetrics
         isTabletMode = resources.configuration.smallestScreenWidthDp >= 580 || dm.widthPixels > dm.heightPixels * 1.15f
 
-        localHub = EmbeddedAndroidLanHub(deviceId, deviceName, { roomCode }, LAN_WS_PORT)
+        localHub = EmbeddedAndroidLanHub(
+            hubId = deviceId,
+            hubName = deviceName,
+            getRoom = { roomCode },
+            port = LAN_WS_PORT,
+            getNeedsReverse = { needsReverseConnect },
+            onRemotePeerJoined = { _, peerName ->
+                needsReverseConnect = false
+                val localUrl = "ws://127.0.0.1:\$LAN_WS_PORT/ws"
+                mainHandler.post {
+                    if (activeWsUrl != localUrl) {
+                        manualHostPort = ""
+                        prefs.edit().putString("manualHostPort", "").apply()
+                        toast("\$peerName conectou ao seu dispositivo! Sincronizando mapa...")
+                        connectToEndpoint(localUrl, "Hub Local (\${getLocalLanIp()})", force = true)
+                    } else {
+                        toast("\$peerName entrou na malha!")
+                    }
+                }
+            }
+        )
         localHub.start()
 
         setContentView(buildRootUi())
@@ -2119,6 +2148,7 @@ class MainActivity : AppCompatActivity() {
                                 .put("startedAt", localHub.startedAt)
                                 .put("peers", localHub.peerCount(roomCode))
                                 .put("remotePeers", localHub.remotePeerCount())
+                                .put("needsReverseConnect", needsReverseConnect)
                                 .toString()
                                 .toByteArray(Charsets.UTF_8)
                             sock.send(DatagramPacket(probe, probe.size, InetAddress.getByName("255.255.255.255"), LAN_UDP_PORT))
@@ -2154,6 +2184,7 @@ class MainActivity : AppCompatActivity() {
                                 .put("startedAt", localHub.startedAt)
                                 .put("peers", localHub.peerCount(roomCode))
                                 .put("remotePeers", localHub.remotePeerCount())
+                                .put("needsReverseConnect", needsReverseConnect)
                                 .toString()
                                 .toByteArray(Charsets.UTF_8)
                             try { sock.send(DatagramPacket(reply, reply.size, packet.address, packet.port)) } catch (_: Exception) { }
@@ -2271,19 +2302,29 @@ class MainActivity : AppCompatActivity() {
         if (!allowAutoConnect || manualHostPort.isNotBlank()) return
         if (localHub.hasRemotePeers() || (connected && devices.size > 1)) return
 
+        // Deterministic tie-breaker between two Android devices: lower hubId hosts
+        if (hub.os.equals("android", ignoreCase = true) && hub.remotePeers == 0 && hub.hubId > deviceId) return
+
         val onSelfOnly = activeWsUrl.startsWith("ws://127.0.0.1")
         if (!connected || onSelfOnly) {
             // Pre-probe via TCP BEFORE switching so we NEVER jump into a firewalled PC!
             Thread {
-                val reachable = probeContinuumHttpInfo(hub.ip, hub.wsPort, 650)
+                val reachable = probeContinuumHttpInfo(hub.ip, hub.wsPort, 700)
                 if (reachable != null) {
+                    needsReverseConnect = false
                     mainHandler.post {
                         if (localHub.hasRemotePeers() || (connected && devices.size > 1)) return@post
-                        roomCode = hub.roomCode
-                        lblSidebarRoom.text = "Malha: \$roomCode"
-                        editRoom.setText(roomCode)
+                        val rRoom = reachable.optString("roomCode", hub.roomCode)
+                        if (rRoom.isNotBlank()) {
+                            roomCode = rRoom
+                            lblSidebarRoom.text = "Malha: \$roomCode"
+                            editRoom.setText(roomCode)
+                        }
                         connectToEndpoint("ws://\${hub.ip}:\${hub.wsPort}/ws", "\${hub.hubName} (\${hub.ip})", force = false)
                     }
+                } else if (!hub.os.equals("android", ignoreCase = true)) {
+                    // PC firewall blocked port 45891 -> signal Desktop to reverse-connect to Android's Hub!
+                    needsReverseConnect = true
                 }
             }.apply { isDaemon = true; start() }
         }
@@ -2387,12 +2428,17 @@ class MainActivity : AppCompatActivity() {
         ws = null
         try { prevWs?.close(1000, "switch") } catch (_: Exception) { }
 
+        val switchedEndpoint = activeWsUrl != url
         activeWsUrl = url
         activeHubLabel = label
         connected = false
         consecutiveFailures = 0
 
         mainHandler.post {
+            if (switchedEndpoint) {
+                devices.clear()
+                syncMapUi()
+            }
             lblTopStatus.text = "Conectando a \$label..."
             lblTopStatus.setTextColor(C_CYAN)
         }
@@ -2588,6 +2634,14 @@ class MainActivity : AppCompatActivity() {
     private fun handleMessage(msg: JSONObject) {
         when (msg.optString("type")) {
             "mesh:init" -> {
+                val initRoom = msg.optString("roomCode", "").trim()
+                if (initRoom.isNotBlank() && initRoom != roomCode) {
+                    roomCode = initRoom
+                    mainHandler.post {
+                        lblSidebarRoom.text = "Malha: \$roomCode"
+                        editRoom.setText(roomCode)
+                    }
+                }
                 parseDevices(msg.optJSONArray("devices"))
                 val clips = msg.optJSONArray("clipboard")
                 if (clips != null) {
@@ -2598,6 +2652,12 @@ class MainActivity : AppCompatActivity() {
                             clipItems.add(ClipItem(o.optString("id"), o.optString("content"), o.optString("sourceDeviceName", "Peer")))
                         }
                         refreshClipboardUi()
+                    }
+                }
+                mainHandler.post {
+                    if (connected) {
+                        lblTopStatus.text = "Conectado · \$activeHubLabel · \${devices.size} disp."
+                        lblTopStatus.setTextColor(C_GREEN)
                     }
                 }
             }

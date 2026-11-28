@@ -13,8 +13,8 @@ android {
         applicationId = "app.continuum.nativeclient"
         minSdk = 26
         targetSdk = 34
-        versionCode = 5
-        versionName = "5.0.0"
+        versionCode = 6
+        versionName = "5.1.0"
 
         buildConfigField("String", "DEFAULT_ROOM_CODE", "\"$defaultRoomCode\"")
     }

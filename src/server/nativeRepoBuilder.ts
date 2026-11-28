@@ -69,7 +69,7 @@ INSTALLED_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: continuum-mesh
-Version: 5.0.0
+Version: 5.1.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -78,10 +78,10 @@ Depends: python3, python3-gi, gir1.2-gtk-3.0
 Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
 Homepage: ${serverUrl}
-Description: Continuum 5.0 - Aplicativo Nativo Linux (Extensao de Tela + KVM + Clipboard Auto)
+Description: Continuum 5.1 - Aplicativo Nativo Linux (Extensao de Tela + KVM + Clipboard Auto)
  Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com 5 espacos de trabalho,
  Extensao de Monitor/Segunda Tela em tempo real via LAN, Mouse e Teclado Continuo (KVM),
- Area de Transferencia Universal Automatica e protocolo LAN Zero-Loop v5.0.
+ Area de Transferencia Universal Automatica e protocolo LAN Zero-Loop v5.1.
 EOF
 chmod 644 "$STAGE/DEBIAN/control"
 
@@ -174,7 +174,7 @@ Icon=continuum
 Terminal=false
 Categories=Network;Utility;System;
 StartupWMClass=continuum_app.py
-X-AppImage-Version=5.0.0
+X-AppImage-Version=5.1.0
 EOF
 chmod 644 "$APPDIR/continuum.desktop"
 cp "$APPDIR/continuum.desktop" "$APPDIR/usr/share/applications/continuum.desktop"
@@ -237,9 +237,9 @@ export function buildNativeRepoEntries(ctx: InstallerContext): ZipEntryInput[] {
   const room = safeStr(ctx.roomCode);
   const serverUrl = safeStr(ctx.appUrl).replace(/\/+$/, '');
 
-  const readmeMd = `# Continuum v5.0 — Extensão de Tela, KVM Contínuo, Clipboard Automático & Malha Zero-Loop (Linux, Windows e Android)
+  const readmeMd = `# Continuum v5.1 — Extensão de Tela, KVM Contínuo, Clipboard Automático & Malha Instantânea (Linux, Windows e Android)
 
-Este repositório compila **aplicativos 100% nativos** — **sem WebView, sem Electron e sem depender do app web** — com interface **holográfica espaçosa em 5 áreas de trabalho** (incluindo barra lateral nativa para Tablets Android) e **protocolo direto LAN Zero-Loop v5.0**:
+Este repositório compila **aplicativos 100% nativos** — **sem WebView, sem Electron e sem depender do app web** — com interface **holográfica espaçosa em 5 áreas de trabalho** (incluindo barra lateral nativa para Tablets Android) e **protocolo direto LAN Zero-Loop v5.1**:
 
 | Plataforma | Tecnologia Nativa Real | Artefatos Compilados (Releases) |
 | --- | --- | --- |
@@ -247,9 +247,9 @@ Este repositório compila **aplicativos 100% nativos** — **sem WebView, sem El
 | **Windows 10 / 11** | **C# .NET 8 WinForms + GDI+ 60 FPS** + High-DPI + Extensão de Tela | \`Continuum-Windows.exe\` (standalone) + \`Continuum-Windows-Setup.exe\` |
 | **Android (Celular e Tablet)** | **Kotlin + Canvas Holográfico + Segunda Tela + Hub Embutido** | \`Continuum-Android.apk\` |
 
-## Novidades da v5.0 (Zero-Loop + Paridade Completa com o Web App)
+## Novidades da v5.1 (Conexão Direta Instantânea + Sala Unificada no Hub LAN)
 
-1. **Conexão Direta Zero-Loop (Tablet ↔ PC):** Trava inteligente de Hub com peers ativos, sonda TCP \`/continuum-info\` pré-conexão (sincroniza a sala automaticamente), descarte de sockets antigos e fallback limpo após 2 falhas — eliminando ciclos infinitos de conexão/reconexão.
+1. **Troca Instantânea de Conexão no Linux + Sala Unificada no Hub:** Encerramento imediato de socket via \`shutdown(SHUT_RDWR)\` ao clicar em **Conectar**, unificação automática da sala do Hub LAN (impedindo dispositivos conectados ao mesmo PC de ficarem isolados em salas diferentes) e eleição determinística Desktop-First com retorno automático ao Hub local.
 2. **Extensão de Monitor / Segunda Tela Nativa:** Streaming direto de tela JPEG pela LAN (Linux GDK/grim, Windows GDI+ CopyFromScreen) para Android Tablet/Celular ou outro PC, com toque direto no cursor do PC e modo Tela Cheia.
 3. **Teclado & Mouse Contínuo (KVM) + Área de Transferência Universal Automática:** Troca por borda de tela, trackpad holográfico com botões dedicados, atalhos (\`Alt+Tab\`, \`Ctrl+C/V\`, mídia) e sincronização automática bidirecional do Clipboard do sistema.
 
@@ -428,12 +428,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: \${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
-          name: Continuum Native Apps v5.0 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Extensão de Tela + KVM + Zero-Loop' }})
+          name: Continuum Native Apps v5.1 (\${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Conexão Instantânea + Extensão de Tela + KVM' }})
           make_latest: true
           body: |
-            ## Continuum v5.0 — Extensão de Tela, KVM Contínuo, Clipboard Automático & LAN Zero-Loop
+            ## Continuum v5.1 — Conexão Instantânea, Sala Unificada no Hub LAN, Extensão de Tela & KVM
 
-            - **Fim do Ciclo de Reconexão (Protocolo Zero-Loop v5.0):** Trava de Hub por peer ativo, sonda TCP \`/continuum-info\` antes de conectar, reassembly completo de frames RFC-6455 (até 32 MB) e fallback automático para o Hub local.
+            - **Conexão 1-Clique Instantânea e Mapa Sempre Sincronizado (v5.1):** Desbloqueio imediato de socket no Linux ao clicar em Conectar, unificação automática de sala no Hub LAN (PC e Tablet sempre aparecem juntos no Mapa Espacial), eleição determinística Desktop-First sem troca cruzada e barra de avisos dedicada no Linux.
             - **Extensão de Monitor / Segunda Tela Nativa:** Transmita qualquer monitor Linux ou Windows diretamente pela rede local para o Tablet/Celular Android ou outro PC com controle por toque direto e modo Tela Cheia.
             - **Mouse & Teclado Contínuo (KVM) + Clipboard Automático:** Borda de tela contínua, trackpad holográfico espaçoso com atalhos de sistema e área de transferência universal sincronizada automaticamente nos 3 sistemas.
             - **UI Lapidada em 5 Espaços de Trabalho:** Layout limpo, sem botões espremidos, com barra lateral responsiva em Tablets Android e High-DPI PerMonitorV2 no Windows.

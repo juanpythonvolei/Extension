@@ -1,5 +1,5 @@
 !include "MUI2.nsh"
-Name "Continuum 5.0"
+Name "Continuum 5.1"
 OutFile "Continuum-Windows-Setup.exe"
 InstallDir "$LOCALAPPDATA\Continuum"
 RequestExecutionLevel user

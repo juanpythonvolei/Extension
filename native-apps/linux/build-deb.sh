@@ -44,7 +44,7 @@ INSTALLED_KB="$(du -sk "$STAGE/usr" | awk '{print $1}')"
 
 cat > "$STAGE/DEBIAN/control" <<EOF
 Package: continuum-mesh
-Version: 5.0.0
+Version: 5.1.0
 Section: utils
 Priority: optional
 Architecture: all
@@ -52,11 +52,11 @@ Installed-Size: ${INSTALLED_KB}
 Depends: python3, python3-gi, gir1.2-gtk-3.0
 Recommends: xdotool, wmctrl, pulseaudio-utils | wireplumber, playerctl, libnotify-bin
 Maintainer: Continuum <support@continuum.local>
-Homepage: https://continuum.local
-Description: Continuum 5.0 - Aplicativo Nativo Linux (Extensao de Tela + KVM + Clipboard Auto)
+Homepage: http://localhost:3000
+Description: Continuum 5.1 - Aplicativo Nativo Linux (Extensao de Tela + KVM + Clipboard Auto)
  Aplicativo desktop nativo em GTK 3 + Cairo 60 FPS com 5 espacos de trabalho,
  Extensao de Monitor/Segunda Tela em tempo real via LAN, Mouse e Teclado Continuo (KVM),
- Area de Transferencia Universal Automatica e protocolo LAN Zero-Loop v5.0.
+ Area de Transferencia Universal Automatica e protocolo LAN Zero-Loop v5.1.
 EOF
 chmod 644 "$STAGE/DEBIAN/control"
 

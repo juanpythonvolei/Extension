@@ -9,7 +9,7 @@ on:
       server_url:
         description: 'URL publica do servidor Continuum (ex: https://ais-pre-...run.app)'
         required: false
-        default: 'https://continuum.local'
+        default: 'http://localhost:3000'
       room_code:
         description: 'Codigo da malha inicial (ex: MESH01)'
         required: false
@@ -170,12 +170,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'latest-native' }}
-          name: Continuum Native Apps v5.0 (${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Extensão de Tela + KVM + Zero-Loop' }})
+          name: Continuum Native Apps v5.1 (${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || 'Conexão Instantânea + Extensão de Tela + KVM' }})
           make_latest: true
           body: |
-            ## Continuum v5.0 — Extensão de Tela, KVM Contínuo, Clipboard Automático & LAN Zero-Loop
+            ## Continuum v5.1 — Conexão Instantânea, Sala Unificada no Hub LAN, Extensão de Tela & KVM
 
-            - **Fim do Ciclo de Reconexão (Protocolo Zero-Loop v5.0):** Trava de Hub por peer ativo, sonda TCP `/continuum-info` antes de conectar, reassembly completo de frames RFC-6455 (até 32 MB) e fallback automático para o Hub local.
+            - **Conexão 1-Clique Instantânea e Mapa Sempre Sincronizado (v5.1):** Desbloqueio imediato de socket no Linux ao clicar em Conectar, unificação automática de sala no Hub LAN (PC e Tablet sempre aparecem juntos no Mapa Espacial), eleição determinística Desktop-First sem troca cruzada e barra de avisos dedicada no Linux.
             - **Extensão de Monitor / Segunda Tela Nativa:** Transmita qualquer monitor Linux ou Windows diretamente pela rede local para o Tablet/Celular Android ou outro PC com controle por toque direto e modo Tela Cheia.
             - **Mouse & Teclado Contínuo (KVM) + Clipboard Automático:** Borda de tela contínua, trackpad holográfico espaçoso com atalhos de sistema e área de transferência universal sincronizada automaticamente nos 3 sistemas.
             - **UI Lapidada em 5 Espaços de Trabalho:** Layout limpo, sem botões espremidos, com barra lateral responsiva em Tablets Android e High-DPI PerMonitorV2 no Windows.

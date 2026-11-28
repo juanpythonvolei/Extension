@@ -19,7 +19,7 @@ export function buildWindowsNativeCsproj(): string {
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
     <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
     <EnableCompressionInSingleFile>true</EnableCompressionInSingleFile>
-    <Version>5.0.0</Version>
+    <Version>5.1.0</Version>
     <Product>Continuum Holographic LAN Mesh</Product>
     <Company>Continuum</Company>
   </PropertyGroup>
@@ -29,7 +29,7 @@ export function buildWindowsNativeCsproj(): string {
 
 export function buildWindowsNsisScript(): string {
   return `!include "MUI2.nsh"
-Name "Continuum 5.0"
+Name "Continuum 5.1"
 OutFile "Continuum-Windows-Setup.exe"
 InstallDir "$LOCALAPPDATA\\Continuum"
 RequestExecutionLevel user
@@ -146,6 +146,7 @@ public sealed class DiscoveredHub
     public string Via { get; set; } = "UDP Auto";
     public DateTime LastSeenUtc { get; set; } = DateTime.UtcNow;
     public bool IsLocal { get; set; }
+    public bool NeedsReverseConnect { get; set; }
 }
 
 public sealed class ClipEntry
@@ -555,6 +556,7 @@ internal sealed class EmbeddedLanHub : IDisposable
     public string HubId { get; }
     public long StartedAt { get; } = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
     public bool Active { get; private set; }
+    public event Action<string, string>? RemotePeerJoined;
 
     private readonly Func<string> _getRoom;
     private TcpListener? _listener;
@@ -819,7 +821,7 @@ internal sealed class EmbeddedLanHub : IDisposable
                     ["startedAt"] = StartedAt,
                     ["peers"] = PeerCount(room),
                     ["remotePeers"] = RemotePeerCount(room),
-                    ["version"] = "5.0.0",
+                    ["version"] = "5.1.0",
                 };
                 var body = Encoding.UTF8.GetBytes(infoObj.ToJsonString());
                 var resp = Encoding.ASCII.GetBytes($"HTTP/1.1 200 OK\\r\\nContent-Type: application/json\\r\\nAccess-Control-Allow-Origin: *\\r\\nContent-Length: {body.Length}\\r\\nConnection: close\\r\\n\\r\\n");
@@ -882,12 +884,14 @@ internal sealed class EmbeddedLanHub : IDisposable
         var type = msg["type"]?.GetValue<string>() ?? "";
         if (type == "mesh:join")
         {
-            var rawRoom = msg["roomCode"]?.GetValue<string>() ?? "${room}";
+            // Canonical Hub Room Unification: all peers joining this LAN Hub share the Hub's active room
+            var rawRoom = _getRoom() ?? "${room}";
             var roomCode = new string(rawRoom.ToUpperInvariant().Where(char.IsLetterOrDigit).Take(12).ToArray());
             if (string.IsNullOrEmpty(roomCode)) roomCode = "MESH01";
 
             var devIn = msg["device"] as JsonObject ?? new JsonObject();
             var devId = devIn["id"]?.GetValue<string>() ?? $"peer-{DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()}";
+            var devName = devIn["name"]?.GetValue<string>() ?? "Dispositivo";
 
             JsonObject devRec;
             JsonArray snapDevs, snapClip, snapNotif;
@@ -905,7 +909,7 @@ internal sealed class EmbeddedLanHub : IDisposable
                 devRec = new JsonObject
                 {
                     ["id"] = devId,
-                    ["name"] = devIn["name"]?.GetValue<string>() ?? "Dispositivo",
+                    ["name"] = devName,
                     ["os"] = devIn["os"]?.GetValue<string>() ?? "windows",
                     ["kind"] = devIn["kind"]?.GetValue<string>() ?? "desktop",
                     ["status"] = "online",
@@ -936,6 +940,10 @@ internal sealed class EmbeddedLanHub : IDisposable
             await SendRawAsync(session, EncodeServerFrame(initPayload.ToJsonString()));
             await BroadcastRoomAsync(roomCode, new JsonObject { ["type"] = "device:joined", ["device"] = devRec.DeepClone() }, exclude: session);
             await BroadcastRoomAsync(roomCode, new JsonObject { ["type"] = "mesh:devices_sync", ["devices"] = snapDevs.DeepClone() });
+            if (devId != HubId)
+            {
+                _ = Task.Run(() => RemotePeerJoined?.Invoke(roomCode, devName));
+            }
             return;
         }
 
@@ -1082,7 +1090,13 @@ internal sealed class UdpDiscoveryService : IDisposable
 
     public DiscoveredHub? ElectBestHub(string roomCode)
     {
-        var list = ListPeers().Where(p => p.RoomCode == roomCode && p.HubId != _hub.HubId).ToList();
+        var list = ListPeers()
+            .Where(p => p.HubId != _hub.HubId && (
+                string.Equals(p.Os, "android", StringComparison.OrdinalIgnoreCase)
+                    ? (p.NeedsReverseConnect || p.RemotePeers > 0)
+                    : (p.RemotePeers > 0 || string.CompareOrdinal(p.HubId, _hub.HubId) < 0)
+            ))
+            .ToList();
         if (_hub.Active)
         {
             list.Add(new DiscoveredHub
@@ -1101,8 +1115,8 @@ internal sealed class UdpDiscoveryService : IDisposable
         }
         return list
             .OrderByDescending(c => c.RemotePeers > 0 ? 1 : 0)
-            .ThenBy(c => c.Os == "android" ? 1 : 0)
-            .ThenBy(c => c.StartedAt)
+            .ThenByDescending(c => c.NeedsReverseConnect ? 1 : 0)
+            .ThenBy(c => string.Equals(c.Os, "android", StringComparison.OrdinalIgnoreCase) ? 1 : 0)
             .ThenBy(c => c.HubId, StringComparer.Ordinal)
             .FirstOrDefault();
     }
@@ -1148,6 +1162,7 @@ internal sealed class UdpDiscoveryService : IDisposable
                                     StartedAt = info["startedAt"]?.GetValue<long>() ?? 0,
                                     Peers = info["peers"]?.GetValue<int>() ?? 1,
                                     RemotePeers = info["remotePeers"]?.GetValue<int>() ?? 0,
+                                    NeedsReverseConnect = info["needsReverseConnect"]?.GetValue<bool>() ?? false,
                                     Via = "TCP Radar",
                                     LastSeenUtc = DateTime.UtcNow,
                                 };
@@ -1276,6 +1291,7 @@ internal sealed class UdpDiscoveryService : IDisposable
                         StartedAt = node["startedAt"]?.GetValue<long>() ?? 0,
                         Peers = node["peers"]?.GetValue<int>() ?? 1,
                         RemotePeers = node["remotePeers"]?.GetValue<int>() ?? 0,
+                        NeedsReverseConnect = node["needsReverseConnect"]?.GetValue<bool>() ?? false,
                         Via = "UDP Auto",
                         LastSeenUtc = DateTime.UtcNow,
                     };
@@ -1919,6 +1935,22 @@ public sealed class MainForm : Form
         _selfId = $"win-{hostClean}-{Guid.NewGuid().ToString("N")[..5]}";
 
         _hub = new EmbeddedLanHub(_selfId, () => _cfg.RoomCode, _cfg.WsPort);
+        _hub.RemotePeerJoined += (_, peerName) =>
+        {
+            var localUrl = $"ws://127.0.0.1:{_hub.Port}/ws";
+            if (!string.Equals(_activeWsUrl, localUrl, StringComparison.OrdinalIgnoreCase))
+            {
+                Log($"Peer remoto '{peerName}' entrou no Hub Local! Retornando para {localUrl}.");
+                _cfg.ManualPeer = "";
+                SaveConfig();
+                SafeUi(() => _txtManualPeer.Text = "");
+                _ = SwitchConnectionAsync(localUrl, isManual: false);
+            }
+            else
+            {
+                Log($"Peer remoto '{peerName}' entrou na malha!");
+            }
+        };
         _hub.Start();
         _discovery = new UdpDiscoveryService(
             _hub,
@@ -1927,7 +1959,7 @@ public sealed class MainForm : Form
             (scanning, pct) => SafeUi(() => { _mapPanel.Scanning = scanning; _mapPanel.ScanPct = pct; _mapPanel.Invalidate(); })
         );
 
-        Text = "Continuum 5.0 — Malha Holográfica Nativa Windows";
+        Text = "Continuum 5.1 — Malha Holográfica Nativa Windows";
         AutoScaleMode = AutoScaleMode.Dpi;
         MinimumSize = new Size(1040, 680);
         Size = new Size(1260, 790);
@@ -3148,6 +3180,12 @@ public sealed class MainForm : Form
         if (type == "mesh:init")
         {
             _connectedHubName = msg["hubName"]?.GetValue<string>() ?? "Hub LAN";
+            var initRoom = msg["roomCode"]?.GetValue<string>() ?? "";
+            if (!string.IsNullOrWhiteSpace(initRoom) && initRoom != _cfg.RoomCode)
+            {
+                _cfg.RoomCode = initRoom;
+                SafeUi(() => { if (_txtRoom != null) _txtRoom.Text = initRoom; });
+            }
             SyncDevicesFromArray(msg["devices"] as JsonArray);
             if (msg["clipboard"] is JsonArray clips)
             {

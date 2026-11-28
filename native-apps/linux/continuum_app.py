@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Continuum v5.0.0 — Aplicativo Desktop 100% Nativo para Linux (GTK 3 + Cairo Holografico + Extensao de Tela + KVM + Clipboard Auto)
+Continuum v5.1.0 — Aplicativo Desktop 100% Nativo para Linux (GTK 3 + Cairo Holografico + Extensao de Tela + KVM + Clipboard Auto)
 Comunicacao direta e estavel entre Linux, Windows e Android via TCP 45891 + UDP 45890 + Radar TCP /24.
 """
 
@@ -24,7 +24,7 @@ import threading
 import time
 import urllib.parse
 
-APP_VERSION = "5.0.0"
+APP_VERSION = "5.1.0"
 LAN_UDP_PORT = 45890
 LAN_WS_PORT = 45891
 PROTO_V5 = "continuum-lan-v5"
@@ -364,10 +364,17 @@ def execute_os_input(event, ui_notify=None):
 # RFC-6455 Pure-Python Helpers (Full Fragmented Frame Support)
 # ---------------------------------------------------------------------------
 
-def recv_exact(sock, n):
+def recv_exact(sock, n, stop_check=None):
     buf = bytearray()
     while len(buf) < n:
-        chunk = sock.recv(n - len(buf))
+        if stop_check and stop_check():
+            raise ConnectionError("Closed")
+        try:
+            chunk = sock.recv(n - len(buf))
+        except socket.timeout:
+            if stop_check and stop_check():
+                raise ConnectionError("Closed")
+            continue
         if not chunk:
             raise ConnectionError("EOF")
         buf.extend(chunk)
@@ -394,24 +401,24 @@ def ws_encode_frame(payload_bytes, opcode=0x1, masked=False):
     return bytes(header) + payload_bytes
 
 
-def ws_read_message(sock):
+def ws_read_message(sock, stop_check=None):
     """Reads a complete RFC-6455 message, automatically reassembling fragmented frames (FIN=0 + opcode=0)."""
     frag_chunks = []
     frag_opcode = None
     while True:
-        b1, b2 = recv_exact(sock, 2)
+        b1, b2 = recv_exact(sock, 2, stop_check=stop_check)
         fin = (b1 & 0x80) != 0
         opcode = b1 & 0x0F
         is_masked = (b2 & 0x80) != 0
         length = b2 & 0x7F
         if length == 126:
-            length = struct.unpack("!H", recv_exact(sock, 2))[0]
+            length = struct.unpack("!H", recv_exact(sock, 2, stop_check=stop_check))[0]
         elif length == 127:
-            length = struct.unpack("!Q", recv_exact(sock, 8))[0]
+            length = struct.unpack("!Q", recv_exact(sock, 8, stop_check=stop_check))[0]
         if length > 32 * 1024 * 1024:
             raise ConnectionError("Frame too large")
-        mask = recv_exact(sock, 4) if is_masked else None
-        payload = recv_exact(sock, length) if length > 0 else b""
+        mask = recv_exact(sock, 4, stop_check=stop_check) if is_masked else None
+        payload = recv_exact(sock, length, stop_check=stop_check) if length > 0 else b""
         if mask is not None and payload:
             payload = bytes(b ^ mask[i & 3] for i, b in enumerate(payload))
         if opcode in (0x8, 0x9, 0xA):
@@ -432,9 +439,10 @@ def ws_read_message(sock):
 # ---------------------------------------------------------------------------
 
 class EmbeddedLanHub:
-    def __init__(self, port=LAN_WS_PORT, get_room_fn=None):
+    def __init__(self, port=LAN_WS_PORT, get_room_fn=None, on_remote_peer_joined=None):
         self.port = port
         self.get_room_fn = get_room_fn or (lambda: DEFAULT_ROOM_CODE)
+        self.on_remote_peer_joined = on_remote_peer_joined
         self.running = False
         self.active = False
         self.started_at = int(time.time() * 1000)
@@ -474,6 +482,10 @@ class EmbeddedLanHub:
             pass
         with self.lock:
             for s in list(self.clients.keys()):
+                try:
+                    s.shutdown(socket.SHUT_RDWR)
+                except Exception:
+                    pass
                 try:
                     s.close()
                 except Exception:
@@ -606,13 +618,13 @@ class EmbeddedLanHub:
                 f"Sec-WebSocket-Accept: {accept}\r\n\r\n"
             )
             conn.sendall(handshake.encode("ascii"))
-            conn.settimeout(None)
+            conn.settimeout(1.0)
 
             with self.lock:
                 self.clients[conn] = {"id": None, "room": None, "addr": addr[0], "send_lock": threading.Lock()}
 
             while self.running:
-                opcode, payload = ws_read_message(conn)
+                opcode, payload = ws_read_message(conn, stop_check=lambda: not self.running)
                 if opcode == 0x8:
                     break
                 if opcode == 0x9:
@@ -666,7 +678,9 @@ class EmbeddedLanHub:
             return
 
         if mtype == "mesh:join":
-            room_code = "".join(c for c in str(msg.get("roomCode", DEFAULT_ROOM_CODE)).upper() if c.isalnum())[:12] or "MESH01"
+            # Canonical Hub Room Unification: every peer joining this LAN Hub enters the Hub's active room
+            # so two devices on the same LAN Hub can NEVER be stranded in separate rooms.
+            room_code = "".join(c for c in str(self.get_room_fn() or DEFAULT_ROOM_CODE).upper() if c.isalnum())[:12] or "MESH01"
             dev = msg.get("device") or {}
             dev_id = str(dev.get("id") or f"peer-{int(time.time()*1000)}")
             with self.lock:
@@ -708,6 +722,12 @@ class EmbeddedLanHub:
             })
             self._broadcast_room(room_code, {"type": "device:joined", "device": dev_record}, exclude=conn)
             self._broadcast_room(room_code, {"type": "mesh:devices_sync", "devices": snapshot_devs})
+            if dev_id != self.hub_id and self.on_remote_peer_joined:
+                threading.Thread(
+                    target=self.on_remote_peer_joined,
+                    args=(room_code, dict(dev_record)),
+                    daemon=True,
+                ).start()
             return
 
         room_code = meta.get("room")
@@ -849,6 +869,7 @@ class LanDiscoveryService:
                                     "startedAt": int(info.get("startedAt") or 0),
                                     "peers": int(info.get("peers") or 1),
                                     "remotePeers": int(info.get("remotePeers") or 0),
+                                    "needsReverseConnect": bool(info.get("needsReverseConnect", False)),
                                     "via": "TCP Radar",
                                     "lastSeen": time.time(),
                                 }
@@ -953,6 +974,7 @@ class LanDiscoveryService:
                     "startedAt": int(info.get("startedAt") or 0),
                     "peers": int(info.get("peers") or 1),
                     "remotePeers": int(info.get("remotePeers") or 0),
+                    "needsReverseConnect": bool(info.get("needsReverseConnect", False)),
                     "via": "UDP Auto",
                     "lastSeen": time.time(),
                 }
@@ -1017,24 +1039,28 @@ class SimpleWebSocket:
         status = resp.split(b"\r\n", 1)[0].decode("utf-8", errors="ignore")
         if "101" not in status:
             raise ConnectionError(f"WebSocket handshake failed: {status}")
-        self.sock.settimeout(None)
+        self.sock.settimeout(1.0)
 
     def send_json(self, obj):
-        if self.closed or self.sock is None:
+        sock = self.sock
+        if self.closed or sock is None:
             return
         frame = ws_encode_frame(json.dumps(obj).encode("utf-8"), opcode=0x1, masked=True)
         with self._lock:
-            self.sock.sendall(frame)
+            sock.sendall(frame)
 
     def recv_json(self):
         while not self.closed:
-            opcode, payload = ws_read_message(self.sock)
+            sock = self.sock
+            if sock is None:
+                return None
+            opcode, payload = ws_read_message(sock, stop_check=lambda: self.closed)
             if opcode == 0x8:
                 self.close()
                 return None
             if opcode == 0x9:
                 with self._lock:
-                    self.sock.sendall(ws_encode_frame(payload, opcode=0xA, masked=True))
+                    sock.sendall(ws_encode_frame(payload, opcode=0xA, masked=True))
                 continue
             if opcode == 0xA:
                 continue
@@ -1044,11 +1070,17 @@ class SimpleWebSocket:
 
     def close(self):
         self.closed = True
-        try:
-            if self.sock:
-                self.sock.close()
-        except Exception:
-            pass
+        sock = self.sock
+        self.sock = None
+        if sock is not None:
+            try:
+                sock.shutdown(socket.SHUT_RDWR)
+            except Exception:
+                pass
+            try:
+                sock.close()
+            except Exception:
+                pass
 
 
 # ---------------------------------------------------------------------------
@@ -1077,6 +1109,7 @@ class ContinuumMeshClient:
         self.hub = EmbeddedLanHub(
             port=int(cfg.get("wsPort") or LAN_WS_PORT),
             get_room_fn=lambda: self.cfg.get("roomCode", DEFAULT_ROOM_CODE),
+            on_remote_peer_joined=self._on_remote_peer_joined,
         )
         if start_hub:
             self.hub.start()
@@ -1092,29 +1125,59 @@ class ContinuumMeshClient:
     def _emit(self, etype, data=None):
         self.events.put((etype, data))
 
+    def _on_remote_peer_joined(self, room_code, dev_rec):
+        peer_name = dev_rec.get("name", "Dispositivo")
+        local_url = f"ws://127.0.0.1:{self.hub.port}/ws"
+        if self.connected_url != local_url:
+            log_msg(f"Peer remoto '{peer_name}' entrou no Hub Local! Retornando cliente para {local_url}.")
+            self.cfg["manualPeer"] = ""
+            self._forced_auto_target = None
+            save_config(self.cfg)
+            self._emit("toast", f"{peer_name} conectou ao seu Hub Local! Sincronizando mapa...")
+            self.reconnect()
+        else:
+            self._emit("toast", f"{peer_name} entrou na malha!")
+
     def _on_lan_peers_changed(self):
         peers = self.discovery.list_peers()
         self._emit("lan_peers", peers)
-        # ZERO-LOOP RULE: NEVER auto-switch if we already have a connected peer in our mesh!
+        # ZERO-LOOP & NO-CROSSOVER RULE:
+        # 1) Never auto-switch if we already have a connected peer in our mesh or on our local Hub.
         if not self.cfg.get("autoLan", True) or self.cfg.get("manualPeer"):
             return
         if self.hub.remote_peer_count() > 0 or len(self.devices) > 1:
             return
         if self._probing_auto:
             return
-        # If alone on 127.0.0.1 and another device is discovered (e.g. Android Tablet when Linux UFW blocks 45891),
-        # probe it via TCP first; if reachable, join it outbound cleanly!
-        room = self.cfg.get("roomCode", DEFAULT_ROOM_CODE)
-        candidates = [p for p in peers if p.get("hubId") != self.hub.hub_id]
+
+        # 2) Deterministic Hub Election (Desktop always hosts for Android unless Android reports firewall block!)
+        candidates = []
+        for p in peers:
+            pid = p.get("hubId", "")
+            if not pid or pid == self.hub.hub_id:
+                continue
+            pos = str(p.get("os", "desktop")).lower()
+            if pos == "android":
+                # Only connect outbound to Android if Android couldn't reach our port (needsReverseConnect) or already hosts peers!
+                if p.get("needsReverseConnect") or int(p.get("remotePeers", 0)) > 0:
+                    candidates.append(p)
+            else:
+                # Between two desktops: join only if peer already hosts remote peers OR has strictly lower hubId
+                if int(p.get("remotePeers", 0)) > 0 or pid < self.hub.hub_id:
+                    candidates.append(p)
         if not candidates:
             return
-        candidates.sort(key=lambda c: (0 if c.get("roomCode") == room else 1, 0 if c.get("remotePeers", 0) > 0 else 1, int(c.get("startedAt", 0))))
+
+        room = self.cfg.get("roomCode", DEFAULT_ROOM_CODE)
+        candidates.sort(key=lambda c: (
+            0 if int(c.get("remotePeers", 0)) > 0 else 1,
+            0 if c.get("os") != "android" else 1,
+            0 if c.get("roomCode") == room else 1,
+            str(c.get("hubId", "")),
+        ))
         best = candidates[0]
         desired = f"ws://{best['ip']}:{best['wsPort']}/ws"
         if desired == self.connected_url:
-            return
-        # Wait 4 seconds after startup before auto-joining an Android fallback hub so Android gets first chance to join PC
-        if best.get("os") == "android" and (time.time() * 1000 - self.hub.started_at) < 4000:
             return
 
         def _probe_and_join():
@@ -1123,7 +1186,7 @@ class ContinuumMeshClient:
                     return
                 self._probing_auto = True
             try:
-                info = probe_http_info(best["ip"], best["wsPort"], timeout=0.65)
+                info = probe_http_info(best["ip"], best["wsPort"], timeout=0.7)
                 if not info:
                     return
                 if self.hub.remote_peer_count() > 0 or len(self.devices) > 1:
@@ -1131,7 +1194,9 @@ class ContinuumMeshClient:
                 r_room = str(info.get("roomCode") or "")
                 if r_room and r_room != self.cfg.get("roomCode"):
                     self.cfg["roomCode"] = r_room
+                    self._emit("room_synced", r_room)
                 self._forced_auto_target = (desired, f"{best['hubName']} ({best['ip']})")
+                self._emit("toast", f"Conectando automaticamente a {best['hubName']} ({best['ip']})...")
                 self.reconnect()
             finally:
                 self._probing_auto = False
@@ -1158,25 +1223,29 @@ class ContinuumMeshClient:
             self.ws.close()
 
     def connect_to_peer(self, host_port_str, room_code=None):
-        """User explicitly clicked Connect on a peer: probe first to sync roomCode, then connect cleanly!"""
+        """User explicitly clicked Connect on a peer: show immediate feedback, probe, sync room, and switch immediately."""
         hp = parse_host_port(host_port_str)
         if not hp:
             self._emit("toast", "Endereco IP invalido. Use ex: 192.168.1.42 ou .42")
             return
         host, port = hp
+        self._emit("toast", f"Conectando a {host}:{port}...")
 
         def _probe():
-            info = probe_http_info(host, port, timeout=1.5)
+            info = probe_http_info(host, port, timeout=1.8)
             if info:
+                r_name = str(info.get("hubName") or info.get("hub") or host)
                 r_room = str(info.get("roomCode") or room_code or self.cfg.get("roomCode", DEFAULT_ROOM_CODE))
                 self.cfg["roomCode"] = r_room
                 self.cfg["manualPeer"] = f"{host}:{port}"
                 self.cfg["autoLan"] = False
+                self._forced_auto_target = None
                 save_config(self.cfg)
                 self._emit("room_synced", r_room)
+                self._emit("toast", f"Conectado ao Hub de {r_name} ({host}:{port})!")
                 self.reconnect()
             else:
-                self._emit("toast", f"Dispositivo {host}:{port} nao respondeu na porta {port}. Verifique a rede Wi-Fi.")
+                self._emit("toast", f"Sem resposta em {host}:{port}. Verifique se o app esta aberto na mesma rede Wi-Fi.")
 
         threading.Thread(target=_probe, daemon=True).start()
 
@@ -1187,6 +1256,7 @@ class ContinuumMeshClient:
         self.cfg["autoLan"] = bool(auto_lan)
         self._forced_auto_target = None
         save_config(self.cfg)
+        self._emit("toast", "Modo de conexao atualizado — reconectando...")
         self.reconnect()
 
     def _resolve_target_ws(self):
@@ -1313,6 +1383,10 @@ class ContinuumMeshClient:
     def _handle_message(self, msg):
         mtype = msg.get("type")
         if mtype == "mesh:init":
+            init_room = str(msg.get("roomCode") or "").strip()
+            if init_room and init_room != self.cfg.get("roomCode"):
+                self.cfg["roomCode"] = init_room
+                self._emit("room_synced", init_room)
             self.devices = msg.get("devices", [])
             self.clipboard = msg.get("clipboard", [])
             self.notifications = msg.get("notifications", [])
@@ -1455,6 +1529,8 @@ def run_gtk_app(cfg, start_hub=True):
     entry:focus { border-color: #22D3EE; }
     progressbar trough { background-color: #0B1220; border-radius: 6px; min-height: 10px; border: 1px solid #1E314F; }
     progressbar progress { background-image: linear-gradient(90deg, #22D3EE, #3B82F6, #8B5CF6); border-radius: 6px; min-height: 10px; }
+    .feedback-banner { background-color: #0D2036; border-bottom: 1px solid #22D3EE; padding: 8px 18px; }
+    .feedback-text { color: #E0F2FE; font-weight: 600; font-size: 12.5px; }
     """
     try:
         provider = Gtk.CssProvider()
@@ -1658,6 +1734,35 @@ def run_gtk_app(cfg, start_hub=True):
     topbar.pack_start(btn_top_scan, False, False, 4)
 
     main_col.pack_start(topbar, False, False, 0)
+
+    banner_box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=10)
+    banner_box.get_style_context().add_class("feedback-banner")
+    banner_box.set_no_show_all(True)
+    lbl_banner = Gtk.Label(label="")
+    lbl_banner.set_xalign(0)
+    lbl_banner.set_line_wrap(True)
+    lbl_banner.get_style_context().add_class("feedback-text")
+    btn_banner_close = Gtk.Button(label="×")
+    btn_banner_close.get_style_context().add_class("btn-ghost")
+    btn_banner_close.connect("clicked", lambda _w: banner_box.hide())
+    banner_box.pack_start(lbl_banner, True, True, 0)
+    banner_box.pack_end(btn_banner_close, False, False, 0)
+    main_col.pack_start(banner_box, False, False, 0)
+    toast_gen = [0]
+
+    def show_banner_toast(message):
+        toast_gen[0] += 1
+        my_gen = toast_gen[0]
+        lbl_banner.set_text(str(message))
+        lbl_banner.show()
+        btn_banner_close.show()
+        banner_box.show()
+        def _auto_hide():
+            if toast_gen[0] == my_gen:
+                banner_box.hide()
+            return False
+        GLib.timeout_add(6500, _auto_hide)
+
     main_col.pack_start(stack, True, True, 0)
 
     def make_card(pad=18, spacing=12):
@@ -2773,7 +2878,7 @@ def run_gtk_app(cfg, start_hub=True):
                 file_hist_box.pack_start(row, False, False, 0)
                 file_hist_box.show_all()
             elif etype == "toast":
-                lbl_top_rtt.set_text(str(data)[:46])
+                show_banner_toast(str(data))
         return True
 
     def on_destroy(_w):
